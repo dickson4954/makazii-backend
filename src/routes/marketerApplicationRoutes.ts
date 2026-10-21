@@ -1,0 +1,121 @@
+import { Router } from "express";
+
+import {
+  submitMarketerApplication,
+  resubmitMarketerApplication,
+  getApplicantMarketerApplicationStatus,
+  getMyMarketerApplication,
+  getMarketerApplications,
+  getMarketerApplication,
+  getMarketerApplicationIdDocument,
+  updateMarketerApplicationIdVerification,
+  reviewMarketerApplication,
+  requestMarketerApplicationChanges,
+  approveMarketerApplication,
+  rejectMarketerApplication,
+} from "../controllers/marketerApplicationController";
+
+import {
+  requireAdmin,
+  requireAuth,
+  requireMarketer,
+} from "../middleware/authMiddleware";
+
+import { marketerIdUpload } from "../middleware/uploadMiddleware";
+
+const router = Router();
+
+router.post(
+  "/",
+  marketerIdUpload.fields([
+    { name: "idFront", maxCount: 1 },
+    { name: "idBack", maxCount: 1 },
+  ]),
+  submitMarketerApplication,
+);
+
+router.patch(
+  "/resubmit",
+  marketerIdUpload.fields([
+    { name: "idFront", maxCount: 1 },
+    { name: "idBack", maxCount: 1 },
+  ]),
+  resubmitMarketerApplication,
+);
+
+router.get(
+  "/status",
+  getApplicantMarketerApplicationStatus,
+);
+
+router.get(
+  "/my-application",
+  requireAuth,
+  requireMarketer,
+  getMyMarketerApplication,
+);
+
+router.get(
+  "/admin",
+  requireAuth,
+  requireAdmin,
+  getMarketerApplications,
+);
+
+router.get(
+  "/admin/:id",
+  requireAuth,
+  requireAdmin,
+  getMarketerApplication,
+);
+
+router.get(
+  "/admin/:id/id/front",
+  requireAuth,
+  requireAdmin,
+  (req, res) => getMarketerApplicationIdDocument(req, res, "front"),
+);
+
+router.get(
+  "/admin/:id/id/back",
+  requireAuth,
+  requireAdmin,
+  (req, res) => getMarketerApplicationIdDocument(req, res, "back"),
+);
+
+router.patch(
+  "/admin/:id/id-verification",
+  requireAuth,
+  requireAdmin,
+  updateMarketerApplicationIdVerification,
+);
+
+router.patch(
+  "/admin/:id/review",
+  requireAuth,
+  requireAdmin,
+  reviewMarketerApplication,
+);
+
+router.patch(
+  "/admin/:id/request-changes",
+  requireAuth,
+  requireAdmin,
+  requestMarketerApplicationChanges,
+);
+
+router.patch(
+  "/admin/:id/approve",
+  requireAuth,
+  requireAdmin,
+  approveMarketerApplication,
+);
+
+router.patch(
+  "/admin/:id/reject",
+  requireAuth,
+  requireAdmin,
+  rejectMarketerApplication,
+);
+
+export default router;

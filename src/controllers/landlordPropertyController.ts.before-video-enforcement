@@ -1,0 +1,540 @@
+import type { Request, Response } from "express";
+import {
+PropertyPurpose,
+PropertyStatus,
+LongStayType,
+ShortStayType,
+StayMode,
+FurnishingType,
+ImageCategory,
+} from "@prisma/client";
+
+import prisma from "../config/prisma";
+import type { AuthenticatedRequest } from "../middleware/authMiddleware";
+
+function positiveInteger(value: unknown): number | undefined {
+if (value === undefined || value === null || value === "") {
+return undefined;
+}
+
+const parsed = Number(value);
+
+if (!Number.isInteger(parsed) || parsed < 0) {
+throw new Error("Numeric property fields must be non-negative integers.");
+}
+
+return parsed;
+}
+
+function text(value: unknown): string {
+return typeof value === "string" ? value.trim() : "";
+}
+
+export async function getLandlordProperties(
+req: AuthenticatedRequest,
+res: Response,
+) {
+try {
+const landlord = await prisma.landlord.findUnique({
+where: { userId: req.user!.userId },
+select: { id: true },
+});
+
+if (!landlord) {
+  return res.status(404).json({
+    success: false,
+    message: "Landlord account was not found.",
+  });
+}
+
+const properties = await prisma.property.findMany({
+  where: { landlordId: landlord.id },
+  include: {
+    images: { orderBy: { sortOrder: "asc" } },
+    amenities: { include: { amenity: true } },
+    countyRelation: true,
+    constituency: true,
+    ward: true,
+    place: true,
+    statusHistory: { orderBy: { createdAt: "desc" } },
+  },
+  orderBy: { createdAt: "desc" },
+});
+
+return res.json({
+  success: true,
+  data: properties,
+});
+
+} catch (error) {
+console.error("Get landlord properties error:", error);
+
+return res.status(500).json({
+  success: false,
+  message: "Failed to load your properties.",
+});
+
+}
+}
+
+export async function createLandlordProperty(
+req: AuthenticatedRequest,
+res: Response,
+) {
+try {
+const userId = req.user!.userId;
+
+const landlord = await prisma.landlord.findUnique({
+  where: { userId },
+  select: {
+    id: true,
+    applicationStatus: true,
+    questionnaire: true,
+  },
+});
+
+if (!landlord) {
+  return res.status(404).json({
+    success: false,
+    message: "Landlord account was not found.",
+  });
+}
+
+if (landlord.applicationStatus !== "APPROVED") {
+  return res.status(403).json({
+    success: false,
+    message: "Your landlord application must be approved before you can submit a property.",
+  });
+}
+
+const body = req.body ?? {};
+const title = text(body.title);
+const description = text(body.description);
+const purpose = body.purpose as PropertyPurpose;
+
+if (!title) {
+  return res.status(400).json({
+    success: false,
+    message: "Property title is required.",
+  });
+}
+
+if (
+  purpose !== PropertyPurpose.LONG_STAY &&
+  purpose !== PropertyPurpose.SHORT_STAY
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Select either LONG_STAY or SHORT_STAY.",
+  });
+}
+
+const countyId = text(body.countyId);
+const constituencyId = text(body.constituencyId);
+const wardId = text(body.wardId);
+const placeId = text(body.placeId) || null;
+
+if (!countyId || !constituencyId || !wardId) {
+  return res.status(400).json({
+    success: false,
+    message: "County, constituency, and ward are required.",
+  });
+}
+
+const questionnaire = landlord.questionnaire as {
+  propertyCounties?: unknown;
+} | null;
+
+const allowedCountyIds = Array.isArray(questionnaire?.propertyCounties)
+  ? questionnaire.propertyCounties
+      .filter(
+        (county: unknown): county is { id: string; name: string } =>
+          typeof county === "object" &&
+          county !== null &&
+          "id" in county &&
+          typeof (county as { id?: unknown }).id === "string",
+      )
+      .map((county) => county.id)
+  : [];
+
+if (allowedCountyIds.length === 0) {
+  return res.status(403).json({
+    success: false,
+    message: "No property counties are saved on your application. Please contact Makazii to update your county selections.",
+  });
+}
+
+if (!allowedCountyIds.includes(countyId)) {
+  return res.status(403).json({
+    success: false,
+    message: "You can only submit properties in counties selected in your landlord application.",
+  });
+}
+
+const county = await prisma.county.findUnique({
+  where: { id: countyId },
+  select: { id: true, name: true },
+});
+
+if (!county) {
+  return res.status(400).json({
+    success: false,
+    message: "Selected county was not found.",
+  });
+}
+
+const constituency = await prisma.constituency.findFirst({
+  where: { id: constituencyId, countyId },
+  select: { id: true },
+});
+
+if (!constituency) {
+  return res.status(400).json({
+    success: false,
+    message: "The selected constituency does not belong to that county.",
+  });
+}
+
+const ward = await prisma.ward.findFirst({
+  where: { id: wardId, constituencyId },
+  select: { id: true },
+});
+
+if (!ward) {
+  return res.status(400).json({
+    success: false,
+    message: "The selected ward does not belong to that constituency.",
+  });
+}
+
+if (placeId) {
+  const place = await prisma.place.findFirst({
+    where: { id: placeId, countyId },
+    select: { id: true },
+  });
+
+  if (!place) {
+    return res.status(400).json({
+      success: false,
+      message: "The selected place does not belong to that county.",
+    });
+  }
+}
+
+const longStayType = body.longStayType as LongStayType | undefined;
+const shortStayType = body.shortStayType as ShortStayType | undefined;
+const stayMode = body.stayMode as StayMode | undefined;
+const furnishing = body.furnishing as FurnishingType | undefined;
+
+if (
+  purpose === PropertyPurpose.LONG_STAY &&
+  !Object.values(LongStayType).includes(longStayType as LongStayType)
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Select a valid long-stay property type.",
+  });
+}
+
+if (
+  purpose === PropertyPurpose.SHORT_STAY &&
+  !Object.values(ShortStayType).includes(shortStayType as ShortStayType)
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Select a valid short-stay property type.",
+  });
+}
+
+if (
+  purpose === PropertyPurpose.SHORT_STAY &&
+  !Object.values(StayMode).includes(stayMode as StayMode)
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Select a valid short-stay pricing mode.",
+  });
+}
+
+if (
+  furnishing &&
+  !Object.values(FurnishingType).includes(furnishing)
+) {
+  return res.status(400).json({
+    success: false,
+    message: "Select a valid furnishing option.",
+  });
+}
+
+const monthlyRent = positiveInteger(body.monthlyRent);
+const deposit = positiveInteger(body.deposit);
+const viewingFee = positiveInteger(body.viewingFee);
+const serviceCharge = positiveInteger(body.serviceCharge);
+const dayRate = positiveInteger(body.dayRate);
+const nightRate = positiveInteger(body.nightRate);
+const dayNightRate = positiveInteger(body.dayNightRate);
+const bedrooms = positiveInteger(body.bedrooms);
+const bathrooms = positiveInteger(body.bathrooms);
+const beds = positiveInteger(body.beds);
+const maxGuests = positiveInteger(body.maxGuests);
+const rooms = positiveInteger(body.rooms);
+
+if (purpose === PropertyPurpose.LONG_STAY && (!monthlyRent || monthlyRent <= 0)) {
+  return res.status(400).json({
+    success: false,
+    message: "Monthly rent must be greater than zero.",
+  });
+}
+
+if (purpose === PropertyPurpose.SHORT_STAY) {
+  if (!maxGuests || !rooms) {
+    return res.status(400).json({
+      success: false,
+      message: "Maximum guests and number of rooms are required for short stays.",
+    });
+  }
+
+  if (
+    (stayMode === StayMode.DAY && !dayRate) ||
+    (stayMode === StayMode.OVERNIGHT && !nightRate) ||
+    (stayMode === StayMode.DAY_AND_NIGHT && !dayNightRate) ||
+    (stayMode === StayMode.FLEXIBLE && !dayRate && !nightRate && !dayNightRate)
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: "Enter a valid rate for the selected stay mode.",
+    });
+  }
+}
+
+const amenityIds = Array.isArray(body.amenityIds)
+? Array.from(new Set(
+(body.amenityIds as unknown[]).filter(
+(id): id is string =>
+typeof id === "string" && id.trim().length > 0,
+),
+))
+: [];
+
+if (amenityIds.length) {
+  const amenities = await prisma.amenity.findMany({
+    where: { id: { in: amenityIds }, isActive: true },
+    select: { id: true },
+  });
+
+  if (amenities.length !== amenityIds.length) {
+    return res.status(400).json({
+      success: false,
+      message: "One or more selected amenities are invalid or inactive.",
+    });
+  }
+}
+
+const rawImages = Array.isArray(body.images) ? body.images : [];
+
+const images: Array<{
+url: string;
+publicId: string | null;
+altText: string | null;
+sortOrder: number;
+isPrimary: boolean;
+category: ImageCategory;
+}> = rawImages.map((image: any, index: number) => {
+  if (!image || typeof image.url !== "string" || !/^https:\/\/.+/i.test(image.url)) {
+    throw new Error("Each property image must have a valid HTTPS URL.");
+  }
+
+  const category = Object.values(ImageCategory).includes(image.category)
+    ? image.category
+    : ImageCategory.OTHER;
+
+  return {
+    url: image.url,
+    publicId: typeof image.publicId === "string" ? image.publicId : null,
+    altText: typeof image.altText === "string" ? image.altText : null,
+    sortOrder: Number.isInteger(image.sortOrder) ? image.sortOrder : index,
+    isPrimary: image.isPrimary === true || (index === 0 && rawImages.length > 0),
+    category,
+  };
+});
+
+const property = await prisma.$transaction(async (tx) => {
+  const created = await tx.property.create({
+    data: {
+      title,
+      description: description || null,
+      purpose,
+      longStayType: purpose === PropertyPurpose.LONG_STAY ? longStayType! : null,
+      shortStayType: purpose === PropertyPurpose.SHORT_STAY ? shortStayType! : null,
+      stayMode: purpose === PropertyPurpose.SHORT_STAY ? stayMode! : null,
+      furnishing: furnishing ?? null,
+
+      status: PropertyStatus.PENDING_VERIFICATION,
+
+      monthlyRent: purpose === PropertyPurpose.LONG_STAY ? monthlyRent ?? null : null,
+      deposit: purpose === PropertyPurpose.LONG_STAY ? deposit ?? null : null,
+      viewingFee: purpose === PropertyPurpose.LONG_STAY ? viewingFee ?? null : null,
+      serviceCharge: purpose === PropertyPurpose.LONG_STAY ? serviceCharge ?? null : null,
+
+      dayRate: purpose === PropertyPurpose.SHORT_STAY ? dayRate ?? null : null,
+      nightRate: purpose === PropertyPurpose.SHORT_STAY ? nightRate ?? null : null,
+      dayNightRate: purpose === PropertyPurpose.SHORT_STAY ? dayNightRate ?? null : null,
+
+      bedrooms: bedrooms ?? null,
+      bathrooms: bathrooms ?? null,
+      beds: purpose === PropertyPurpose.SHORT_STAY ? beds ?? null : null,
+      maxGuests: purpose === PropertyPurpose.SHORT_STAY ? maxGuests ?? null : null,
+      rooms: purpose === PropertyPurpose.SHORT_STAY ? rooms ?? null : null,
+
+      countyId,
+      constituencyId,
+      wardId,
+      county: county.name,
+      town: text(body.town),
+      area: text(body.area),
+      placeId,
+
+      available: true,
+      verified: false,
+      verifiedAt: null,
+      verifiedById: null,
+
+      createdById: userId,
+      landlordId: landlord.id,
+      marketerId: null,
+
+      amenities: amenityIds.length
+        ? { create: amenityIds.map((amenityId) => ({ amenityId })) }
+        : undefined,
+
+      statusHistory: {
+        create: {
+          toStatus: PropertyStatus.PENDING_VERIFICATION,
+          note: "Submitted by landlord for administrator review.",
+          changedById: userId,
+        },
+      },
+    },
+  });
+
+  if (images.length) {
+    await tx.propertyImage.createMany({
+      data: images.map((image) => ({
+        ...image,
+        propertyId: created.id,
+        uploadedById: userId,
+      })),
+    });
+  }
+
+  return created;
+});
+
+const completeProperty = await prisma.property.findUnique({
+  where: { id: property.id },
+  include: {
+    images: { orderBy: { sortOrder: "asc" } },
+    amenities: { include: { amenity: true } },
+    countyRelation: true,
+    constituency: true,
+    ward: true,
+    place: true,
+    statusHistory: { orderBy: { createdAt: "desc" } },
+  },
+});
+
+return res.status(201).json({
+  success: true,
+  message: "Property submitted for administrator review.",
+  data: completeProperty,
+});
+
+} catch (error) {
+console.error("Create landlord property error:", error);
+
+return res.status(400).json({
+  success: false,
+  message: error instanceof Error
+    ? error.message
+    : "Failed to submit property.",
+});
+
+}
+}
+
+/**
+ * GET /api/landlord/properties/:id
+ *
+ * Return one property belonging to the authenticated landlord.
+ * Never expose another landlord's property through an ID lookup.
+ */
+export async function getLandlordProperty(
+  req: AuthenticatedRequest,
+  res: Response,
+) {
+  try {
+    const userId = req.user!.userId;
+    const propertyId =
+      typeof req.params.id === "string" ? req.params.id.trim() : "";
+
+    if (!propertyId) {
+      return res.status(400).json({
+        success: false,
+        message: "A property ID is required.",
+      });
+    }
+
+    const landlord = await prisma.landlord.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+
+    if (!landlord) {
+      return res.status(404).json({
+        success: false,
+        message: "Landlord account was not found.",
+      });
+    }
+
+    const property = await prisma.property.findFirst({
+      where: {
+        id: propertyId,
+        landlordId: landlord.id,
+      },
+      include: {
+        images: {
+          orderBy: { sortOrder: "asc" },
+        },
+        amenities: {
+          include: { amenity: true },
+        },
+        countyRelation: true,
+        constituency: true,
+        ward: true,
+        place: true,
+        statusHistory: {
+          orderBy: { createdAt: "desc" },
+        },
+      },
+    });
+
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: "Property not found in your landlord account.",
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: property,
+    });
+  } catch (error) {
+    console.error("Get landlord property details error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load property details.",
+    });
+  }
+}

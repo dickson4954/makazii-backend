@@ -1,0 +1,285 @@
+import type { Request, Response } from "express";
+
+import prisma from "../config/prisma";
+
+/**
+ * GET PUBLIC COUNTIES
+ *
+ * GET /api/geography/counties
+ *
+ * Used by the public marketer application.
+ * No authentication required.
+ */
+export async function getPublicCounties(
+  _req: Request,
+  res: Response
+) {
+  try {
+    const counties = await prisma.county.findMany({
+      orderBy: {
+        name: "asc",
+      },
+      select: {
+        id: true,
+        sourceId: true,
+        name: true,
+        coverImageUrl: true,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        counties,
+        count: counties.length,
+      },
+    });
+  } catch (error) {
+    console.error("Get public counties error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve counties",
+    });
+  }
+}
+
+/**
+ * GET PUBLIC CONSTITUENCIES FOR COUNTY
+ *
+ * GET /api/geography/counties/:countyId/constituencies
+ *
+ * Used by the public marketer application.
+ * No authentication required.
+ */
+export async function getPublicConstituenciesByCounty(
+  req: Request,
+  res: Response
+) {
+  try {
+    const countyId = String(req.params.countyId);
+
+    if (!countyId.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "County ID is required",
+      });
+    }
+
+    const county = await prisma.county.findUnique({
+      where: {
+        id: countyId,
+      },
+      select: {
+        id: true,
+        sourceId: true,
+        name: true,
+      },
+    });
+
+    if (!county) {
+      return res.status(404).json({
+        success: false,
+        message: "County not found",
+      });
+    }
+
+    const constituencies = await prisma.constituency.findMany({
+      where: {
+        countyId,
+      },
+      orderBy: {
+        name: "asc",
+      },
+      select: {
+        id: true,
+        sourceId: true,
+        name: true,
+        countyId: true,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        county,
+        constituencies,
+        count: constituencies.length,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Get public constituencies by county error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve constituencies",
+    });
+  }
+}
+
+/**
+ * GET PUBLIC WARDS FOR CONSTITUENCY
+ *
+ * GET /api/geography/constituencies/:constituencyId/wards
+ *
+ * Used by the public marketer application.
+ * No authentication required.
+ */
+export async function getPublicWardsByConstituency(
+  req: Request,
+  res: Response
+) {
+  try {
+    const constituencyId = String(req.params.constituencyId);
+
+    if (!constituencyId.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Constituency ID is required",
+      });
+    }
+
+    const constituency = await prisma.constituency.findUnique({
+      where: {
+        id: constituencyId,
+      },
+      select: {
+        id: true,
+        sourceId: true,
+        name: true,
+        countyId: true,
+        county: {
+          select: {
+            id: true,
+            sourceId: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!constituency) {
+      return res.status(404).json({
+        success: false,
+        message: "Constituency not found",
+      });
+    }
+
+    const wards = await prisma.ward.findMany({
+      where: {
+        constituencyId,
+      },
+      orderBy: {
+        name: "asc",
+      },
+      select: {
+        id: true,
+        sourceId: true,
+        name: true,
+        constituencyId: true,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        county: constituency.county,
+        constituency: {
+          id: constituency.id,
+          sourceId: constituency.sourceId,
+          name: constituency.name,
+          countyId: constituency.countyId,
+        },
+        wards,
+        count: wards.length,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Get public wards by constituency error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve wards",
+    });
+  }
+}
+
+/**
+ * GET PUBLIC PLACES FOR COUNTY
+ *
+ * GET /api/geography/counties/:countyId/places
+ *
+ * Used by the public marketer application.
+ * No authentication required.
+ */
+export async function getPublicPlacesByCounty(
+  req: Request,
+  res: Response
+) {
+  try {
+    const countyId = String(req.params.countyId);
+
+    if (!countyId.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "County ID is required",
+      });
+    }
+
+    const county = await prisma.county.findUnique({
+      where: {
+        id: countyId,
+      },
+      select: {
+        id: true,
+        sourceId: true,
+        name: true,
+      },
+    });
+
+    if (!county) {
+      return res.status(404).json({
+        success: false,
+        message: "County not found",
+      });
+    }
+
+    const places = await prisma.place.findMany({
+      where: {
+        countyId,
+      },
+      orderBy: {
+        name: "asc",
+      },
+      select: {
+        id: true,
+        name: true,
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        county,
+        places,
+        count: places.length,
+      },
+    });
+  } catch (error) {
+    console.error(
+      "Get public places by county error:",
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve places",
+    });
+  }
+}

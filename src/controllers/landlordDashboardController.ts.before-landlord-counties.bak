@@ -1,0 +1,218 @@
+import type { Response } from "express";
+
+import prisma from "../config/prisma";
+import type { AuthenticatedRequest } from "../middleware/authMiddleware";
+
+export async function getLandlordDashboard(
+  req: AuthenticatedRequest,
+  res: Response,
+) {
+  try {
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    const landlord = await prisma.landlord.findUnique({
+      where: { userId },
+      select: {
+        id: true,
+        applicationStatus: true,
+        idVerificationStatus: true,
+        idVerificationMessage: true,
+        createdAt: true,
+      },
+    });
+
+    if (!landlord) {
+      return res.status(404).json({
+        success: false,
+        message: "Landlord account was not found.",
+      });
+    }
+
+    const propertyFilter = {
+      landlordId: landlord.id,
+    };
+
+    const [
+      totalProperties,
+      draftProperties,
+      pendingVerification,
+      changesRequired,
+      activeProperties,
+      rentedProperties,
+      inactiveProperties,
+      rejectedProperties,
+      totalViewings,
+      pendingPaymentViewings,
+      paidViewings,
+      approvedViewings,
+      completedViewings,
+      totalInspections,
+      pendingPaymentInspections,
+      paidInspections,
+      completedInspections,
+    ] = await Promise.all([
+      prisma.property.count({ where: propertyFilter }),
+
+      prisma.property.count({
+        where: {
+          ...propertyFilter,
+          status: "DRAFT",
+        },
+      }),
+
+      prisma.property.count({
+        where: {
+          ...propertyFilter,
+          status: "PENDING_VERIFICATION",
+        },
+      }),
+
+      prisma.property.count({
+        where: {
+          ...propertyFilter,
+          status: "CHANGES_REQUIRED",
+        },
+      }),
+
+      prisma.property.count({
+        where: {
+          ...propertyFilter,
+          status: "ACTIVE",
+        },
+      }),
+
+      prisma.property.count({
+        where: {
+          ...propertyFilter,
+          status: "RENTED",
+        },
+      }),
+
+      prisma.property.count({
+        where: {
+          ...propertyFilter,
+          status: "INACTIVE",
+        },
+      }),
+
+      prisma.property.count({
+        where: {
+          ...propertyFilter,
+          status: "REJECTED",
+        },
+      }),
+
+      prisma.viewingRequest.count({
+        where: {
+          property: propertyFilter,
+        },
+      }),
+
+      prisma.viewingRequest.count({
+        where: {
+          property: propertyFilter,
+          status: "PENDING_PAYMENT",
+        },
+      }),
+
+      prisma.viewingRequest.count({
+        where: {
+          property: propertyFilter,
+          status: "PAID",
+        },
+      }),
+
+      prisma.viewingRequest.count({
+        where: {
+          property: propertyFilter,
+          status: {
+            in: ["ASSIGNED", "APPROVED", "RESCHEDULED", "CONFIRMED"],
+          },
+        },
+      }),
+
+      prisma.viewingRequest.count({
+        where: {
+          property: propertyFilter,
+          status: "COMPLETED",
+        },
+      }),
+
+      prisma.stayInspection.count({
+        where: {
+          property: propertyFilter,
+        },
+      }),
+
+      prisma.stayInspection.count({
+        where: {
+          property: propertyFilter,
+          status: "PENDING_PAYMENT",
+        },
+      }),
+
+      prisma.stayInspection.count({
+        where: {
+          property: propertyFilter,
+          status: "PAID",
+        },
+      }),
+
+      prisma.stayInspection.count({
+        where: {
+          property: propertyFilter,
+          status: "COMPLETED",
+        },
+      }),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        application: {
+          status: landlord.applicationStatus,
+          idVerificationStatus: landlord.idVerificationStatus,
+          idVerificationMessage: landlord.idVerificationMessage,
+          registeredAt: landlord.createdAt,
+        },
+        properties: {
+          total: totalProperties,
+          draft: draftProperties,
+          pendingVerification,
+          changesRequired,
+          active: activeProperties,
+          rented: rentedProperties,
+          inactive: inactiveProperties,
+          rejected: rejectedProperties,
+        },
+        viewings: {
+          total: totalViewings,
+          pendingPayment: pendingPaymentViewings,
+          paid: paidViewings,
+          approved: approvedViewings,
+          completed: completedViewings,
+        },
+        inspections: {
+          total: totalInspections,
+          pendingPayment: pendingPaymentInspections,
+          paid: paidInspections,
+          completed: completedInspections,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get landlord dashboard error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load the landlord dashboard.",
+    });
+  }
+}

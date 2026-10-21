@@ -1,0 +1,47 @@
+import { Router } from "express";
+
+import {
+  requireAuth,
+  requireMarketer,
+  requireActiveMarketer,
+} from "../middleware/authMiddleware";
+
+import {
+  getMarketerProperties,
+  getMarketerProperty,
+  createMarketerProperty,
+  updateMarketerProperty,
+  updateMarketerPropertyStatus,
+  updateMarketerPropertyAvailability,
+} from "../controllers/marketerPropertyController";
+
+const router = Router();
+
+/*
+ * All marketer property routes require:
+ * 1. Authentication
+ * 2. MARKETER role
+ */
+router.use(requireAuth);
+router.use(requireMarketer);
+router.use(requireActiveMarketer);
+
+router.get("/", getMarketerProperties);
+
+router.post("/", createMarketerProperty);
+
+router.get("/:id", getMarketerProperty);
+
+router.patch("/:id", updateMarketerProperty);
+
+router.patch(
+  "/:id/status",
+  updateMarketerPropertyStatus,
+);
+
+router.patch(
+  "/:id/availability",
+  updateMarketerPropertyAvailability,
+);
+
+export default router;

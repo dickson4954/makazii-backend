@@ -1,0 +1,46 @@
+import { Router } from "express";
+
+import {
+  requireAuth,
+  requireAdmin,
+} from "../middleware/authMiddleware";
+
+import {
+  getCounties,
+  createCounty,
+  getPlacesByCounty,
+  createPlace,
+} from "../controllers/geographyController";
+
+const router = Router();
+
+/**
+ * All geography management routes require:
+ *
+ * 1. Valid JWT
+ * 2. ADMIN role
+ */
+router.use(requireAuth);
+router.use(requireAdmin);
+
+/**
+ * GET /api/admin/counties
+ */
+router.get("/", getCounties);
+
+/**
+ * POST /api/admin/counties
+ */
+router.post("/", createCounty);
+
+/**
+ * GET /api/admin/counties/:countyId/places
+ */
+router.get("/:countyId/places", getPlacesByCounty);
+
+/**
+ * POST /api/admin/counties/:countyId/places
+ */
+router.post("/:countyId/places", createPlace);
+
+export default router;

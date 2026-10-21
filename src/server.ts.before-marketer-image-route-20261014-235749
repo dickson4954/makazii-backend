@@ -1,0 +1,274 @@
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+
+import prisma from "./config/prisma";
+import authRoutes from "./routes/authRoutes";
+import marketerProfileChangeRoutes from "./routes/marketerProfileChangeRoutes";
+import marketerPropertyRoutes from "./routes/marketerPropertyRoutes";
+import marketerAmenitiesRoutes from "./routes/marketerAmenitiesRoutes";
+import marketerPortalRoutes from "./routes/marketerPortalRoutes";
+import marketerFeedbackRoutes from "./routes/marketerFeedbackRoutes";
+import marketerRoutes from "./routes/marketerRoutes";
+import marketerApplicationRoutes from "./routes/marketerApplicationRoutes";
+import geographyRoutes from "./routes/geographyRoutes";
+import publicGeographyRoutes from "./routes/publicGeographyRoutes";
+import userRoutes from "./routes/userRoutes";
+import propertyRoutes from "./routes/propertyRoutes";
+import propertyImageRoutes from "./routes/propertyImageRoutes";
+import adminPropertyVideoRoutes from "./routes/adminPropertyVideoRoutes";
+import landlordPropertyVideoRoutes from "./routes/landlordPropertyVideoRoutes";
+import marketerPropertyVideoRoutes from "./routes/marketerPropertyVideoRoutes";
+import landlordPropertyRoutes from "./routes/landlordPropertyRoutes";
+import landlordPropertyImageRoutes from "./routes/landlordPropertyImageRoutes";
+import landlordAmenitiesRoutes from "./routes/landlordAmenitiesRoutes";
+import landlordDashboardRoutes from "./routes/landlordDashboardRoutes";
+import landlordPaymentRoutes from "./routes/landlordPaymentRoutes";
+import landlordAccountRoutes from "./routes/landlordAccountRoutes";
+import landlordViewingRoutes from "./routes/landlordViewingRoutes";
+import landlordProblemReportRoutes from "./routes/landlordProblemReportRoutes";
+import landlordStayInspectionRoutes from "./routes/landlordStayInspectionRoutes";
+import amenityRoutes from "./routes/amenityRoutes";
+import customerViewingRoutes from "./routes/customerViewingRoutes";
+import customerStayInspectionRoutes from "./routes/customerStayInspectionRoutes";
+import adminStayInspectionRoutes from "./routes/adminStayInspectionRoutes";
+import paymentRoutes from "./routes/paymentRoutes";
+import adminViewingRoutes from "./routes/adminViewingRoutes";
+import adminLandlordRoutes from "./routes/adminLandlordRoutes";
+import adminNotificationRoutes from "./routes/adminNotificationRoutes";
+import adminFeedbackRoutes from "./routes/adminFeedbackRoutes";
+import adminProblemReportRoutes from "./routes/adminProblemReportRoutes";
+import customerFeedbackRoutes from "./routes/customerFeedbackRoutes";
+import customerProblemReportRoutes from "./routes/customerProblemReportRoutes";
+import customerPropertyRoutes from "./routes/customerPropertyRoutes";
+import customerShortlistRoutes from "./routes/customerShortlistRoutes";
+
+const app = express();
+
+const PORT = process.env.PORT || 5000;
+
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+/**
+ * AUTH ROUTES
+ *
+ * Login, current user, etc.
+ */
+app.use("/api/auth", authRoutes);
+app.use("/api/marketer/properties", marketerPropertyRoutes);
+app.use("/api/marketer/property-videos", marketerPropertyVideoRoutes);
+app.use("/api/marketer/amenities", marketerAmenitiesRoutes);
+
+/**
+ * MARKETER PORTAL
+ *
+ * Authenticated marketer's own profile,
+ * coverage and portal statistics.
+ *
+ * GET /api/marketer/me
+ */
+app.use("/api/marketer", marketerPortalRoutes);
+app.use("/api/marketer/feedback", marketerFeedbackRoutes);
+
+/**
+ * PUBLIC → MARKETER APPLICATIONS
+ *
+ * Public application submission:
+ *
+ * POST /api/marketer-applications
+ *
+ * Admin application review:
+ *
+ * GET    /api/marketer-applications/admin
+ * GET    /api/marketer-applications/admin/:id
+ * PATCH  /api/marketer-applications/admin/:id/review
+ * PATCH  /api/marketer-applications/admin/:id/request-changes
+ * PATCH  /api/marketer-applications/admin/:id/approve
+ * PATCH  /api/marketer-applications/admin/:id/reject
+ *
+ * The public POST route does not require authentication.
+ * Admin routes are protected inside marketerApplicationRoutes.
+ */
+app.use(
+  "/api/marketer-applications",
+  marketerApplicationRoutes
+);
+
+/**
+ * ADMIN → MARKETERS
+ *
+ * All routes inside marketerRoutes are protected
+ * by requireAuth + requireAdmin.
+ *
+ * POST   /api/admin/marketers
+ * GET    /api/admin/marketers
+ * GET    /api/admin/marketers/:id
+ * PATCH  /api/admin/marketers/:id/approve
+ * PATCH  /api/admin/marketers/:id/deactivate
+ *
+ * GET    /api/admin/marketers/:id/places
+ * POST   /api/admin/marketers/:id/places
+ * DELETE /api/admin/marketers/:id/places/:placeId
+ */
+app.use(
+  "/api/admin/marketers/profile-change-requests",
+  marketerProfileChangeRoutes
+);
+app.use("/api/admin/marketers", marketerRoutes);
+app.use("/api/admin/landlords", adminLandlordRoutes);
+
+/**
+ * ADMIN → CUSTOMERS
+ *
+ * Customers are registered users with role = RENTER.
+ *
+ * GET    /api/admin/users
+ * GET    /api/admin/users/:id
+ * PATCH  /api/admin/users/:id/status
+ * GET    /api/admin/users/:id/status-history
+ *
+ * All routes are protected by requireAuth + requireAdmin.
+ */
+app.use("/api/admin/users", userRoutes);
+
+/**
+ * ADMIN → PROPERTIES
+ *
+ * Property management endpoints.
+ *
+ * GET    /api/admin/properties
+ * POST   /api/admin/properties
+ * GET    /api/admin/properties/:id
+ * PATCH  /api/admin/properties/:id
+ * PATCH  /api/admin/properties/:id/status
+ * PATCH  /api/admin/properties/:id/availability
+ *
+ * All routes are protected by requireAuth + requireAdmin
+ * inside propertyRoutes.
+ */
+app.use("/api/admin/properties", propertyRoutes);
+app.use("/api/admin/property-images", propertyImageRoutes);
+app.use("/api/admin/property-videos", adminPropertyVideoRoutes);
+app.use("/api/landlord/properties", landlordPropertyRoutes);
+app.use("/api/landlord/property-images", landlordPropertyImageRoutes);
+app.use("/api/landlord/property-videos", landlordPropertyVideoRoutes);
+app.use("/api/landlord/amenities", landlordAmenitiesRoutes);
+app.use("/api/landlord/dashboard", landlordDashboardRoutes);
+app.use("/api/landlord/payments", landlordPaymentRoutes);
+app.use("/api/landlord/account", landlordAccountRoutes);
+app.use("/api/landlord/viewings", landlordViewingRoutes);
+app.use("/api/landlord/problem-reports", landlordProblemReportRoutes);
+app.use("/api/landlord/inspections", landlordStayInspectionRoutes);
+app.use("/api/admin/amenities", amenityRoutes);
+
+/**
+ * ADMIN → VIEWINGS
+ *
+ * GET  /api/admin/viewings
+ * GET  /api/admin/viewings/:viewingId
+ * POST /api/admin/viewings/:viewingId/approve
+ *
+ * Admin approval automatically assigns the property's
+ * source marketer to the viewing.
+ */
+app.use("/api/admin/viewings", adminViewingRoutes);
+app.use("/api/admin/notifications", adminNotificationRoutes);
+app.use("/api/admin/feedback", adminFeedbackRoutes);
+app.use("/api/admin/problem-reports", adminProblemReportRoutes);
+
+/**
+ * CUSTOMER → VIEWINGS
+ *
+ * POST /api/viewings
+ *
+ * Creates a long-stay viewing request.
+ * New requests start as PENDING_PAYMENT.
+ *
+ * Marketer assignment happens only after
+ * successful payment + admin approval.
+ */
+app.use("/api/viewings", customerViewingRoutes);
+app.use("/api/stay-inspections", customerStayInspectionRoutes);
+app.use("/api/admin/stay-inspections", adminStayInspectionRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/feedback", customerFeedbackRoutes);
+app.use("/api/problem-reports", customerProblemReportRoutes);
+app.use("/api/properties", customerPropertyRoutes);
+app.use("/api/customer/shortlist", customerShortlistRoutes);
+
+/**
+ * ADMIN → GEOGRAPHY
+ *
+ * Counties and places used to organize
+ * marketers and properties.
+ *
+ * GET  /api/admin/counties
+ * POST /api/admin/counties
+ * GET  /api/admin/counties/:countyId/places
+ * POST /api/admin/counties/:countyId/places
+ */
+app.use("/api/admin/counties", geographyRoutes);
+
+/**
+ * PUBLIC → GEOGRAPHY
+ *
+ * Counties, constituencies, wards and places
+ * used by public application forms.
+ *
+ * GET /api/geography/counties
+ * GET /api/geography/counties/:countyId/constituencies
+ * GET /api/geography/constituencies/:constituencyId/wards
+ * GET /api/geography/counties/:countyId/places
+ *
+ * These routes do not require authentication.
+ */
+app.use("/api/geography", publicGeographyRoutes);
+
+/**
+ * ROOT
+ */
+app.get("/", (_req, res) => {
+  res.json({
+    success: true,
+    message: "MAKAZII API is running",
+  });
+});
+
+/**
+ * DATABASE HEALTH CHECK
+ */
+app.get("/api/health", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+
+    res.json({
+      success: true,
+      message: "MAKAZII backend is healthy",
+      database: "connected",
+    });
+  } catch (error) {
+    console.error("Database health check failed:", error);
+
+    res.status(500).json({
+      success: false,
+      message:
+        "MAKAZII backend is running, but database connection failed",
+      database: "disconnected",
+    });
+  }
+});
+
+/**
+ * START SERVER
+ */
+app.listen(PORT, () => {
+  console.log(`MAKAZII API running on port ${PORT}`);
+});

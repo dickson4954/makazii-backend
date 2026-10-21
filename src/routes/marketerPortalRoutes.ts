@@ -1,0 +1,65 @@
+import { Router } from "express";
+
+import {
+  requireAuth,
+  requireMarketer,
+  requireActiveMarketer,
+} from "../middleware/authMiddleware";
+
+import {
+  getCurrentMarketer,
+} from "../controllers/marketerPortalController";
+
+import {
+  getMarketerViewings,
+} from "../controllers/marketerViewingController";
+
+import {
+  confirmMarketerViewing,
+  rescheduleMarketerViewing,
+  completeMarketerViewing,
+} from "../controllers/viewingLifecycleController";
+
+const router = Router();
+
+router.use(requireAuth);
+router.use(requireMarketer);
+router.use(requireActiveMarketer);
+
+router.get("/me", getCurrentMarketer);
+
+router.get("/viewings", getMarketerViewings);
+
+/**
+ * ASSIGNED -> APPROVED
+ *
+ * The marketer approves the requested appointment time.
+ * The physical viewing has NOT happened yet.
+ */
+router.post(
+  "/viewings/:viewingId/confirm",
+  confirmMarketerViewing
+);
+
+/**
+ * ASSIGNED -> RESCHEDULED
+ *
+ * The marketer chooses another future appointment time.
+ */
+router.post(
+  "/viewings/:viewingId/reschedule",
+  rescheduleMarketerViewing
+);
+
+/**
+ * APPROVED / RESCHEDULED -> COMPLETED
+ *
+ * The marketer uses this only after the physical viewing
+ * has actually taken place.
+ */
+router.post(
+  "/viewings/:viewingId/complete",
+  completeMarketerViewing
+);
+
+export default router;

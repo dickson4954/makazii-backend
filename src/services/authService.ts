@@ -1,0 +1,1487 @@
+import bcrypt from "bcryptjs";
+import jwt, { type SignOptions } from "jsonwebtoken";
+import crypto from "crypto";
+
+import prisma from "../config/prisma";
+import type { Prisma, UserRole } from "@prisma/client";
+
+type LoginRole = "ADMIN" | "MARKETER" | "RENTER" | "LANDLORD";
+
+interface JwtPayload {
+  userId: string;
+  role: UserRole;
+  email: string;
+}
+
+interface SignupInput {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  password: string;
+}
+
+interface LandlordSignupInput extends SignupInput {
+  nationalIdNumber: string;
+  questionnaire: unknown;
+  idFrontReference: string;
+  idBackReference: string;
+}
+
+interface LoginInput {
+  emailOrPhone: string;
+  password: string;
+}
+
+interface UpdateProfileInput {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string | null;
+}
+
+interface ChangePasswordInput {
+  currentPassword: string;
+  newPassword: string;
+}
+
+interface VerifyCustomerEmailInput {
+  email: string;
+  code: string;
+}
+
+const JWT_SECRET: string =
+  process.env.JWT_SECRET ||
+  (() => {
+    throw new Error("JWT_SECRET is not defined");
+  })();
+
+const JWT_EXPIRES_IN =
+  process.env.JWT_EXPIRES_IN || "7d";
+
+const PASSWORD_RESET_EXPIRY_MINUTES = 30;
+
+const CUSTOMER_EMAIL_VERIFICATION_EXPIRY_MINUTES = 10;
+
+const SALT_ROUNDS = 12;
+
+/**
+ * Remove sensitive fields before returning a user.
+ *
+ * The password is NEVER returned to the client.
+ */
+function sanitizeUser(user: {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string | null;
+  role: UserRole;
+  isActive: boolean;
+  emailVerifiedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}) {
+  return {
+    id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    email: user.email,
+    phone: user.phone,
+    role: user.role,
+    isActive: user.isActive,
+    emailVerifiedAt: user.emailVerifiedAt,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
+
+/**
+ * Normalize an email address.
+ */
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/**
+ * Normalize a phone number.
+ */
+function normalizePhone(
+  phone?: string | null
+): string | null {
+  if (!phone) {
+    return null;
+  }
+
+  const cleaned = phone.trim();
+
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+/**
+ * Validate a password.
+ */
+function validatePassword(password: string): void {
+  if (!password || password.length < 6) {
+    throw new Error(
+      "Password must be at least 6 characters long"
+    );
+  }
+}
+
+/**
+ * Generate a cryptographically secure
+ * 6-digit customer email verification code.
+ */
+function generateCustomerVerificationCode(): string {
+  return crypto
+    .randomInt(100000, 1000000)
+    .toString();
+}
+
+/**
+ * Hash a customer verification code.
+ *
+ * We never store the actual six-digit code
+ * in the database.
+ */
+function hashCustomerVerificationCode(
+  code: string
+): string {
+  return crypto
+    .createHash("sha256")
+    .update(code)
+    .digest("hex");
+}
+
+/**
+ * Print the verification code to the backend
+ * terminal during development.
+ *
+ * Later this function can be replaced with a
+ * real email provider without changing the
+ * signup/verification API.
+ */
+function printCustomerVerificationCode(
+  email: string,
+  code: string,
+  expiresAt: Date
+): void {
+  console.log("");
+  console.log(
+    "=================================================="
+  );
+  console.log(
+    "          MAKAZII CUSTOMER EMAIL VERIFICATION"
+  );
+  console.log(
+    "=================================================="
+  );
+  console.log(`Email:   ${email}`);
+  console.log(`Code:    ${code}`);
+  console.log(
+    `Expires: ${expiresAt.toLocaleString()}`
+  );
+  console.log(
+    "=================================================="
+  );
+  console.log("");
+}
+
+/**
+ * Create and store a customer email verification code.
+ *
+ * Previous unused verification codes are invalidated
+ * before the new code is created.
+ */
+async function createCustomerEmailVerification(
+  userId: string,
+  email: string
+) {
+  await prisma.customerEmailVerification.updateMany({
+    where: {
+      userId,
+      usedAt: null,
+    },
+    data: {
+      usedAt: new Date(),
+    },
+  });
+
+  const code =
+    generateCustomerVerificationCode();
+
+  const codeHash =
+    hashCustomerVerificationCode(code);
+
+  const expiresAt =
+    new Date(
+      Date.now() +
+        CUSTOMER_EMAIL_VERIFICATION_EXPIRY_MINUTES *
+          60 *
+          1000
+    );
+
+  await prisma.customerEmailVerification.create({
+    data: {
+      userId,
+      codeHash,
+      expiresAt,
+    },
+  });
+
+  printCustomerVerificationCode(
+    email,
+    code,
+    expiresAt
+  );
+
+  return {
+    expiresAt,
+  };
+}
+
+/**
+ * Create a JWT for an authenticated user.
+ *
+ * The user's role is included in the token so the
+ * authorization middleware can enforce role-based access.
+ */
+function createAccessToken(user: {
+  id: string;
+  email: string;
+  role: UserRole;
+}): string {
+  const payload: JwtPayload = {
+    userId: user.id,
+    email: user.email,
+    role: user.role,
+  };
+
+  return jwt.sign(payload, JWT_SECRET, {
+    expiresIn:
+      JWT_EXPIRES_IN as SignOptions["expiresIn"],
+  });
+}
+
+/**
+ * Find a user using email OR phone.
+ */
+async function findUserByEmailOrPhone(
+  identifier: string
+) {
+  const value = identifier.trim();
+
+  if (!value) {
+    return null;
+  }
+
+  const normalizedEmail = normalizeEmail(value);
+
+  return prisma.user.findFirst({
+    where: {
+      OR: [
+        {
+          email: normalizedEmail,
+        },
+        {
+          phone: value,
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * CUSTOMER SIGNUP
+ *
+ * Customers are stored as RENTER users.
+ *
+ * New customers must verify their email before
+ * they can log in.
+ */
+export async function signupCustomer(
+  input: SignupInput
+) {
+  const firstName = input.firstName.trim();
+  const lastName = input.lastName.trim();
+  const email = normalizeEmail(input.email);
+  const phone = normalizePhone(input.phone);
+
+  if (!firstName || firstName.length < 2) {
+    throw new Error(
+      "First name must be at least 2 characters long"
+    );
+  }
+
+  if (!lastName || lastName.length < 2) {
+    throw new Error(
+      "Last name must be at least 2 characters long"
+    );
+  }
+
+  if (!email || !email.includes("@")) {
+    throw new Error(
+      "Please provide a valid email address"
+    );
+  }
+
+  validatePassword(input.password);
+
+  if (phone && phone.length < 9) {
+    throw new Error(
+      "Please provide a valid phone number"
+    );
+  }
+
+  const existingByEmail =
+    await prisma.user.findUnique({
+      where: {
+        email,
+      },
+    });
+
+  if (existingByEmail) {
+    throw new Error(
+      "An account with this email already exists"
+    );
+  }
+
+  if (phone) {
+    const existingByPhone =
+      await prisma.user.findUnique({
+        where: {
+          phone,
+        },
+      });
+
+    if (existingByPhone) {
+      throw new Error(
+        "An account with this phone number already exists"
+      );
+    }
+  }
+
+  const hashedPassword = await bcrypt.hash(
+    input.password,
+    SALT_ROUNDS
+  );
+
+  const user = await prisma.user.create({
+    data: {
+      firstName,
+      lastName,
+      email,
+      phone,
+      password: hashedPassword,
+      role: "RENTER",
+      isActive: true,
+      emailVerifiedAt: null,
+    },
+  });
+
+  const verification =
+    await createCustomerEmailVerification(
+      user.id,
+      user.email
+    );
+
+  return {
+    user: sanitizeUser(user),
+    verificationRequired: true,
+    verificationExpiresAt:
+      verification.expiresAt,
+  };
+}
+
+/**
+ * LANDLORD SIGNUP
+ *
+ * Creates a landlord user and their application together.
+ * ID files must already have been moved to private storage.
+ * Application approval and ID verification remain separate.
+ */
+export async function signupLandlord(
+  input: LandlordSignupInput
+) {
+  const firstName = input.firstName?.trim() ?? "";
+  const lastName = input.lastName?.trim() ?? "";
+  const email = normalizeEmail(input.email ?? "");
+  const phone = normalizePhone(input.phone);
+  const nationalIdNumber =
+    input.nationalIdNumber?.trim() ?? "";
+
+  if (firstName.length < 2) {
+    throw new Error("First name must be at least 2 characters long");
+  }
+
+  if (lastName.length < 2) {
+    throw new Error("Last name must be at least 2 characters long");
+  }
+
+  if (!email || !email.includes("@")) {
+    throw new Error("Please provide a valid email address");
+  }
+
+  validatePassword(input.password);
+
+  if (phone && phone.length < 9) {
+    throw new Error("Please provide a valid phone number");
+  }
+
+  if (
+    nationalIdNumber.length < 5 ||
+    nationalIdNumber.length > 30
+  ) {
+    throw new Error("Please provide a valid national ID number");
+  }
+
+  if (
+    !input.idFrontReference?.startsWith("private://landlord-ids/") ||
+    !input.idBackReference?.startsWith("private://landlord-ids/")
+  ) {
+    throw new Error("Both ID documents must be uploaded securely");
+  }
+
+  const questionnaire = input.questionnaire;
+
+  if (
+    !questionnaire ||
+    typeof questionnaire !== "object" ||
+    Array.isArray(questionnaire)
+  ) {
+    throw new Error("Please provide valid questionnaire answers");
+  }
+
+  const existingByEmail = await prisma.user.findUnique({
+    where: { email },
+  });
+
+  if (existingByEmail) {
+    throw new Error("An account with this email already exists");
+  }
+
+  if (phone) {
+    const existingByPhone = await prisma.user.findUnique({
+      where: { phone },
+    });
+
+    if (existingByPhone) {
+      throw new Error("An account with this phone number already exists");
+    }
+  }
+
+  const hashedPassword = await bcrypt.hash(
+    input.password,
+    SALT_ROUNDS
+  );
+
+  const result = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.create({
+      data: {
+        firstName,
+        lastName,
+        email,
+        phone,
+        password: hashedPassword,
+        role: "LANDLORD",
+        isActive: true,
+      },
+    });
+
+    const landlord = await tx.landlord.create({
+      data: {
+        userId: user.id,
+        nationalIdNumber,
+        idFrontReference: input.idFrontReference,
+        idBackReference: input.idBackReference,
+        questionnaire:
+          questionnaire as Prisma.InputJsonValue,
+        applicationStatus: "PENDING",
+        idVerificationStatus: "PENDING",
+      },
+    });
+
+    return { user, landlord };
+  });
+
+  return {
+    user: sanitizeUser(result.user),
+    landlord: {
+      id: result.landlord.id,
+      applicationStatus: result.landlord.applicationStatus,
+      idVerificationStatus: result.landlord.idVerificationStatus,
+      createdAt: result.landlord.createdAt,
+    },
+  };
+}
+
+/**
+ * VERIFY CUSTOMER EMAIL
+ *
+ * Accepts the customer's email and the
+ * six-digit verification code.
+ */
+export async function verifyCustomerEmail(
+  input: VerifyCustomerEmailInput
+) {
+  const email =
+    normalizeEmail(input.email);
+
+  const code =
+    input.code?.trim();
+
+  if (
+    !email ||
+    !email.includes("@")
+  ) {
+    throw new Error(
+      "Please provide a valid email address"
+    );
+  }
+
+  if (!code || !/^\d{6}$/.test(code)) {
+    throw new Error(
+      "Verification code must be 6 digits"
+    );
+  }
+
+  const user =
+    await prisma.user.findUnique({
+      where: {
+        email,
+      },
+    });
+
+  if (!user) {
+    throw new Error(
+      "No customer account was found for this email"
+    );
+  }
+
+  if (user.role !== "RENTER") {
+    throw new Error(
+      "This verification flow is only for customer accounts"
+    );
+  }
+
+  if (!user.isActive) {
+    throw new Error(
+      "Your account is inactive"
+    );
+  }
+
+  if (user.emailVerifiedAt) {
+    return {
+      message:
+        "Email address is already verified",
+      user: sanitizeUser(user),
+    };
+  }
+
+  const verification =
+    await prisma.customerEmailVerification.findFirst({
+      where: {
+        userId: user.id,
+        usedAt: null,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+  if (!verification) {
+    throw new Error(
+      "No active verification code was found. Please request a new code."
+    );
+  }
+
+  if (
+    verification.expiresAt.getTime() <
+    Date.now()
+  ) {
+    await prisma.customerEmailVerification.update({
+      where: {
+        id: verification.id,
+      },
+      data: {
+        usedAt: new Date(),
+      },
+    });
+
+    throw new Error(
+      "This verification code has expired. Please request a new code."
+    );
+  }
+
+  const codeHash =
+    hashCustomerVerificationCode(code);
+
+  if (
+    codeHash !== verification.codeHash
+  ) {
+    throw new Error(
+      "Invalid verification code"
+    );
+  }
+
+  const verifiedAt = new Date();
+
+  const updatedUser =
+    await prisma.$transaction(async (tx) => {
+      const updated =
+        await tx.user.update({
+          where: {
+            id: user.id,
+          },
+          data: {
+            emailVerifiedAt: verifiedAt,
+          },
+        });
+
+      await tx.customerEmailVerification.update({
+        where: {
+          id: verification.id,
+        },
+        data: {
+          usedAt: verifiedAt,
+        },
+      });
+
+      await tx.customerEmailVerification.updateMany({
+        where: {
+          userId: user.id,
+          id: {
+            not: verification.id,
+          },
+          usedAt: null,
+        },
+        data: {
+          usedAt: verifiedAt,
+        },
+      });
+
+      return updated;
+    });
+
+  return {
+    message:
+      "Email address verified successfully",
+    user: sanitizeUser(updatedUser),
+  };
+}
+
+/**
+ * RESEND CUSTOMER EMAIL VERIFICATION
+ */
+export async function resendCustomerEmailVerification(
+  emailInput: string
+) {
+  const email =
+    normalizeEmail(emailInput);
+
+  if (
+    !email ||
+    !email.includes("@")
+  ) {
+    throw new Error(
+      "Please provide a valid email address"
+    );
+  }
+
+  const user =
+    await prisma.user.findUnique({
+      where: {
+        email,
+      },
+    });
+
+  if (!user) {
+    throw new Error(
+      "No customer account was found for this email"
+    );
+  }
+
+  if (user.role !== "RENTER") {
+    throw new Error(
+      "This verification flow is only for customer accounts"
+    );
+  }
+
+  if (!user.isActive) {
+    throw new Error(
+      "Your account is inactive"
+    );
+  }
+
+  if (user.emailVerifiedAt) {
+    return {
+      message:
+        "Email address is already verified",
+      verificationRequired: false,
+    };
+  }
+
+  const verification =
+    await createCustomerEmailVerification(
+      user.id,
+      user.email
+    );
+
+  return {
+    message:
+      "A new verification code has been generated",
+    verificationRequired: true,
+    verificationExpiresAt:
+      verification.expiresAt,
+  };
+}
+
+/**
+ * LOGIN
+ *
+ * Shared implementation for:
+ *
+ * - Customer
+ * - Admin
+ * - Marketer
+ *
+ * The expected role is checked on the backend.
+ */
+export async function loginUser(
+  input: LoginInput,
+  expectedRole: LoginRole
+) {
+  const identifier =
+    input.emailOrPhone?.trim();
+
+  if (!identifier) {
+    throw new Error(
+      "Email or phone number is required"
+    );
+  }
+
+  if (!input.password) {
+    throw new Error("Password is required");
+  }
+
+  const user =
+    await findUserByEmailOrPhone(identifier);
+
+  if (!user) {
+    throw new Error(
+      "Invalid login credentials"
+    );
+  }
+
+  if (!user.isActive) {
+    throw new Error(
+      "Your account is inactive. Please contact MAKAZII management."
+    );
+  }
+
+  /**
+   * Role-based login protection.
+   */
+  if (user.role !== expectedRole) {
+    throw new Error(
+      "Invalid login credentials"
+    );
+  }
+
+  /**
+   * Customers must verify their email before
+   * they can access the customer application.
+   *
+   * Admins and marketers are not affected.
+   */
+  if (
+    expectedRole === "RENTER" &&
+    !user.emailVerifiedAt
+  ) {
+    throw new Error(
+      "Please verify your email before logging in."
+    );
+  }
+
+  const passwordMatches =
+    await bcrypt.compare(
+      input.password,
+      user.password
+    );
+
+  if (!passwordMatches) {
+    throw new Error(
+      "Invalid login credentials"
+    );
+  }
+
+  const token = createAccessToken(user);
+
+  return {
+    token,
+    user: sanitizeUser(user),
+  };
+}
+
+/**
+ * CUSTOMER LOGIN
+ */
+export async function loginCustomer(
+  input: LoginInput
+) {
+  return loginUser(input, "RENTER");
+}
+
+/**
+ * ADMIN LOGIN
+ */
+export async function loginAdmin(
+  input: LoginInput
+) {
+  return loginUser(input, "ADMIN");
+}
+
+/**
+ * MARKETER LOGIN
+ */
+export async function loginMarketer(
+  input: LoginInput
+) {
+  return loginUser(input, "MARKETER");
+}
+
+/**
+ * LANDLORD LOGIN
+ *
+ * Landlords may log in while their application
+ * is pending review. Application approval is
+ * checked separately from authentication.
+ */
+export async function loginLandlord(
+  input: LoginInput
+) {
+  return loginUser(input, "LANDLORD");
+}
+
+/**
+ * Get the authenticated landlord's application status.
+ * Never expose private ID document references.
+ */
+export async function getLandlordApplicationStatus(userId: string) {
+  const landlord = await prisma.landlord.findUnique({
+    where: { userId },
+    select: {
+      applicationStatus: true,
+      reviewNotes: true,
+      reviewedAt: true,
+      idVerificationStatus: true,
+      idVerificationMessage: true,
+      createdAt: true,
+      updatedAt: true,
+      questionnaire: true,
+    },
+  });
+
+  if (!landlord) {
+    throw new Error("Landlord application not found for this account");
+  }
+
+  // Return only the public county selection from the questionnaire.
+  // Never expose private ID-document references or other questionnaire data.
+  const questionnaire =
+    landlord.questionnaire &&
+    typeof landlord.questionnaire === "object" &&
+    !Array.isArray(landlord.questionnaire)
+      ? landlord.questionnaire as Record<string, unknown>
+      : {};
+
+  const rawPropertyCounties = Array.isArray(questionnaire.propertyCounties)
+    ? questionnaire.propertyCounties
+    : [];
+
+  const propertyCounties = rawPropertyCounties
+    .filter((item): item is Record<string, unknown> => (
+      typeof item === "object" &&
+      item !== null &&
+      !Array.isArray(item) &&
+      typeof (item as Record<string, unknown>).id === "string" &&
+      typeof (item as Record<string, unknown>).name === "string"
+    ))
+    .map((item) => ({
+      id: item.id as string,
+      name: item.name as string,
+    }));
+
+  const { questionnaire: _privateQuestionnaire, ...applicationStatus } = landlord;
+
+  return {
+    ...applicationStatus,
+    propertyCounties,
+  };
+}
+
+/**
+ * GET CURRENT USER
+ *
+ * Used by protected routes such as:
+ *
+ * /api/auth/me
+ */
+export async function getCurrentUser(
+  userId: string
+) {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: userId,
+    },
+  });
+
+  if (!user) {
+    throw new Error(
+      "User account not found"
+    );
+  }
+
+  if (!user.isActive) {
+    throw new Error(
+      "Your account is inactive"
+    );
+  }
+
+  return {
+    user: sanitizeUser(user),
+  };
+}
+
+/**
+ * UPDATE PROFILE
+ *
+ * Password changes are handled separately by
+ * changePassword().
+ */
+export async function updateProfile(
+  userId: string,
+  input: UpdateProfileInput
+) {
+  const existingUser =
+    await prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+    });
+
+  if (!existingUser) {
+    throw new Error(
+      "User account not found"
+    );
+  }
+
+  if (!existingUser.isActive) {
+    throw new Error(
+      "Your account is inactive"
+    );
+  }
+
+  /**
+   * Marketer profile fields require administrator
+   * approval. Password changes remain available
+   * directly through changePassword().
+   */
+  if (existingUser.role === "MARKETER") {
+    const attemptingProfileChange =
+      input.firstName !== undefined ||
+      input.lastName !== undefined ||
+      input.email !== undefined ||
+      input.phone !== undefined;
+
+    if (attemptingProfileChange) {
+      throw new Error(
+        "Marketer profile changes require administrator approval. Please submit a profile change request."
+      );
+    }
+  }
+
+  const data: {
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    phone?: string | null;
+  } = {};
+
+  if (input.firstName !== undefined) {
+    const firstName =
+      input.firstName.trim();
+
+    if (firstName.length < 2) {
+      throw new Error(
+        "First name must be at least 2 characters long"
+      );
+    }
+
+    data.firstName = firstName;
+  }
+
+  if (input.lastName !== undefined) {
+    const lastName =
+      input.lastName.trim();
+
+    if (lastName.length < 2) {
+      throw new Error(
+        "Last name must be at least 2 characters long"
+      );
+    }
+
+    data.lastName = lastName;
+  }
+
+  if (input.email !== undefined) {
+    const email =
+      normalizeEmail(input.email);
+
+    if (
+      !email ||
+      !email.includes("@")
+    ) {
+      throw new Error(
+        "Please provide a valid email address"
+      );
+    }
+
+    const emailOwner =
+      await prisma.user.findUnique({
+        where: {
+          email,
+        },
+      });
+
+    if (
+      emailOwner &&
+      emailOwner.id !== userId
+    ) {
+      throw new Error(
+        "That email address is already in use"
+      );
+    }
+
+    data.email = email;
+  }
+
+  if (input.phone !== undefined) {
+    const phone =
+      normalizePhone(input.phone);
+
+    if (phone && phone.length < 9) {
+      throw new Error(
+        "Please provide a valid phone number"
+      );
+    }
+
+    if (phone) {
+      const phoneOwner =
+        await prisma.user.findUnique({
+          where: {
+            phone,
+          },
+        });
+
+      if (
+        phoneOwner &&
+        phoneOwner.id !== userId
+      ) {
+        throw new Error(
+          "That phone number is already in use"
+        );
+      }
+    }
+
+    data.phone = phone;
+  }
+
+  const updatedUser =
+    await prisma.user.update({
+      where: {
+        id: userId,
+      },
+      data,
+    });
+
+  return {
+    user: sanitizeUser(updatedUser),
+  };
+}
+
+/**
+ * CHANGE PASSWORD
+ *
+ * Used by authenticated users who know
+ * their current password.
+ */
+export async function changePassword(
+  userId: string,
+  input: ChangePasswordInput
+) {
+  if (!input.currentPassword) {
+    throw new Error(
+      "Current password is required"
+    );
+  }
+
+  validatePassword(input.newPassword);
+
+  if (
+    input.currentPassword ===
+    input.newPassword
+  ) {
+    throw new Error(
+      "New password must be different from your current password"
+    );
+  }
+
+  const user =
+    await prisma.user.findUnique({
+      where: {
+        id: userId,
+      },
+    });
+
+  if (!user) {
+    throw new Error(
+      "User account not found"
+    );
+  }
+
+  if (!user.isActive) {
+    throw new Error(
+      "Your account is inactive"
+    );
+  }
+
+  const currentPasswordMatches =
+    await bcrypt.compare(
+      input.currentPassword,
+      user.password
+    );
+
+  if (!currentPasswordMatches) {
+    throw new Error(
+      "Current password is incorrect"
+    );
+  }
+
+  const hashedPassword =
+    await bcrypt.hash(
+      input.newPassword,
+      SALT_ROUNDS
+    );
+
+  await prisma.user.update({
+    where: {
+      id: userId,
+    },
+    data: {
+      password: hashedPassword,
+    },
+  });
+
+  return {
+    message:
+      "Password changed successfully",
+  };
+}
+
+/**
+ * FORGOT PASSWORD
+ *
+ * Creates a short-lived, one-time reset token.
+ *
+ * For the current development stage, the raw token
+ * is returned so that we can test the complete reset
+ * flow before connecting an email provider.
+ */
+export async function forgotPassword(
+  emailInput: string
+) {
+  const email =
+    normalizeEmail(emailInput);
+
+  if (
+    !email ||
+    !email.includes("@")
+  ) {
+    throw new Error(
+      "Please provide a valid email address"
+    );
+  }
+
+  const user =
+    await prisma.user.findUnique({
+      where: {
+        email,
+      },
+    });
+
+  /**
+   * Do not reveal whether an email exists.
+   */
+  if (!user) {
+    return {
+      message:
+        "If an account exists for that email, password reset instructions will be sent.",
+    };
+  }
+
+  if (!user.isActive) {
+    return {
+      message:
+        "If an account exists for that email, password reset instructions will be sent.",
+    };
+  }
+
+  /**
+   * Invalidate previous unused reset tokens.
+   */
+  await prisma.passwordResetToken.updateMany({
+    where: {
+      userId: user.id,
+      usedAt: null,
+    },
+    data: {
+      usedAt: new Date(),
+    },
+  });
+
+  /**
+   * Generate a cryptographically secure token.
+   */
+  const rawToken =
+    crypto.randomBytes(32).toString("hex");
+
+  /**
+   * Store only the SHA-256 hash.
+   */
+  const tokenHash =
+    crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+
+  const expiresAt =
+    new Date(
+      Date.now() +
+        PASSWORD_RESET_EXPIRY_MINUTES *
+          60 *
+          1000
+    );
+
+  await prisma.passwordResetToken.create({
+    data: {
+      userId: user.id,
+      tokenHash,
+      expiresAt,
+    },
+  });
+
+  /**
+   * DEVELOPMENT ONLY.
+   *
+   * Later this token will be placed inside
+   * a password-reset email instead.
+   */
+  return {
+    message:
+      "If an account exists for that email, password reset instructions will be sent.",
+
+    resetToken: rawToken,
+
+    expiresAt,
+  };
+}
+
+/**
+ * RESET PASSWORD
+ *
+ * Accepts the raw reset token and creates
+ * a new password.
+ */
+export async function resetPassword(
+  rawToken: string,
+  newPassword: string
+) {
+  if (
+    !rawToken ||
+    rawToken.trim().length < 20
+  ) {
+    throw new Error(
+      "Invalid or expired password reset token"
+    );
+  }
+
+  validatePassword(newPassword);
+
+  const tokenHash =
+    crypto
+      .createHash("sha256")
+      .update(rawToken.trim())
+      .digest("hex");
+
+  const resetToken =
+    await prisma.passwordResetToken.findUnique({
+      where: {
+        tokenHash,
+      },
+      include: {
+        user: true,
+      },
+    });
+
+  if (!resetToken) {
+    throw new Error(
+      "Invalid or expired password reset token"
+    );
+  }
+
+  if (resetToken.usedAt) {
+    throw new Error(
+      "This password reset token has already been used"
+    );
+  }
+
+  if (
+    resetToken.expiresAt.getTime() <
+    Date.now()
+  ) {
+    throw new Error(
+      "This password reset token has expired"
+    );
+  }
+
+  if (!resetToken.user.isActive) {
+    throw new Error(
+      "Your account is inactive"
+    );
+  }
+
+  const hashedPassword =
+    await bcrypt.hash(
+      newPassword,
+      SALT_ROUNDS
+    );
+
+  /**
+   * Update password and invalidate reset tokens
+   * in one database transaction.
+   */
+  await prisma.$transaction([
+    prisma.user.update({
+      where: {
+        id: resetToken.userId,
+      },
+      data: {
+        password: hashedPassword,
+      },
+    }),
+
+    prisma.passwordResetToken.update({
+      where: {
+        id: resetToken.id,
+      },
+      data: {
+        usedAt: new Date(),
+      },
+    }),
+
+    prisma.passwordResetToken.updateMany({
+      where: {
+        userId: resetToken.userId,
+        id: {
+          not: resetToken.id,
+        },
+        usedAt: null,
+      },
+      data: {
+        usedAt: new Date(),
+      },
+    }),
+  ]);
+
+  return {
+    message:
+      "Password reset successfully",
+  };
+}
+
+/**
+ * VERIFY ACCESS TOKEN
+ *
+ * Used by authMiddleware.ts.
+ */
+export function verifyAccessToken(
+  token: string
+): JwtPayload {
+  try {
+    const decoded =
+      jwt.verify(
+        token,
+        JWT_SECRET
+      ) as unknown as JwtPayload;
+
+    if (
+      !decoded ||
+      typeof decoded !== "object" ||
+      !decoded.userId ||
+      !decoded.role ||
+      !decoded.email
+    ) {
+      throw new Error(
+        "Invalid token payload"
+      );
+    }
+
+    return decoded;
+  } catch {
+    throw new Error(
+      "Invalid or expired authentication token"
+    );
+  }
+}
+
+/**
+ * DELETE EXPIRED PASSWORD RESET TOKENS
+ *
+ * This can later be called by a scheduled cleanup job.
+ */
+export async function deleteExpiredPasswordResetTokens() {
+  const result =
+    await prisma.passwordResetToken.deleteMany({
+      where: {
+        expiresAt: {
+          lt: new Date(),
+        },
+      },
+    });
+
+  return {
+    deleted: result.count,
+  };
+}
+
+/**
+ * DELETE EXPIRED CUSTOMER EMAIL VERIFICATIONS
+ *
+ * This can later be called by a scheduled cleanup job.
+ */
+export async function deleteExpiredCustomerEmailVerifications() {
+  const result =
+    await prisma.customerEmailVerification.deleteMany({
+      where: {
+        expiresAt: {
+          lt: new Date(),
+        },
+      },
+    });
+
+  return {
+    deleted: result.count,
+  };
+}

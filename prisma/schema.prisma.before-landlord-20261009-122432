@@ -1,0 +1,1561 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// =============================================================
+// USER / AUTHENTICATION
+// =============================================================
+
+model User {
+  id        String   @id @default(cuid())
+  firstName String
+  lastName  String
+  email     String   @unique
+  phone     String?  @unique
+  password  String
+  role      UserRole @default(RENTER)
+
+  accountStatus     AccountStatus @default(ACTIVE)
+  statusReason      String?
+  statusChangedAt   DateTime?
+  statusChangedById String?
+
+  // Kept because existing authentication logic uses this.
+  isActive Boolean @default(true)
+
+  emailVerifiedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // -----------------------------------------------------------
+  // MARKETER
+  // -----------------------------------------------------------
+
+  marketer Marketer?
+
+  // -----------------------------------------------------------
+  // PROPERTY CREATION / VERIFICATION
+  // -----------------------------------------------------------
+  //
+  // createdBy:
+  // The actual user who entered the property.
+  // Can be ADMIN, STAFF, or MARKETER.
+  //
+  // verifiedProperties:
+  // Admin/staff user who verified the property.
+  //
+
+  propertiesCreated      Property[]      @relation("PropertyCreatedBy")
+  propertiesVerified     Property[]      @relation("PropertyVerifiedBy")
+  propertyImagesUploaded PropertyImage[] @relation("PropertyImageUploadedBy")
+
+  // -----------------------------------------------------------
+  // AUTHENTICATION
+  // -----------------------------------------------------------
+
+  passwordResets     PasswordResetToken[]
+  emailVerifications CustomerEmailVerification[]
+
+  // -----------------------------------------------------------
+  // CUSTOMER ACTIVITY
+  // -----------------------------------------------------------
+
+  shortlists      Shortlist[]
+  viewingRequests ViewingRequest[]
+  stayBookings    StayBooking[]
+  stayInspections StayInspection[]
+
+  // -----------------------------------------------------------
+  // PAYMENTS
+  // -----------------------------------------------------------
+
+  payments Payment[]
+
+  // -----------------------------------------------------------
+  // NOTIFICATIONS
+  // -----------------------------------------------------------
+
+  notifications Notification[]
+
+  // -----------------------------------------------------------
+  // SUPPORT / FEEDBACK
+  // -----------------------------------------------------------
+
+  supportRequests SupportRequest[]
+  feedback        Feedback[]
+  problemReports  ProblemReport[]
+
+  // -----------------------------------------------------------
+  // AUDIT
+  // -----------------------------------------------------------
+
+  auditLogs     AuditLog[]
+  statusHistory UserStatusHistory[]
+
+  @@index([role])
+  @@index([email])
+  @@index([accountStatus])
+  @@index([createdAt])
+}
+
+// =============================================================
+// USER ACCOUNT STATUS
+// =============================================================
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  BLOCKED
+}
+
+model UserStatusHistory {
+  id          String        @id @default(cuid())
+  userId      String
+  status      AccountStatus
+  reason      String?
+  changedById String?
+  createdAt   DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// =============================================================
+// PASSWORD RESET
+// =============================================================
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// =============================================================
+// CUSTOMER EMAIL VERIFICATION
+// =============================================================
+
+model CustomerEmailVerification {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// =============================================================
+// MARKETERS
+// =============================================================
+
+model Marketer {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Geographic coverage.
+  places   MarketerPlace[]
+  coverage MarketerCoverage?
+
+  // Source marketer for properties.
+  properties Property[]
+
+  // Operational assignments.
+  viewings    ViewingRequest[] @relation("ViewingAssignedMarketer")
+  bookings    StayBooking[]    @relation("BookingAssignedMarketer")
+  inspections StayInspection[] @relation("InspectionAssignedMarketer")
+
+  // Application that created this marketer.
+  application MarketerApplication?
+
+  // Profile changes.
+  profileChangeRequests MarketerProfileChangeRequest[]
+
+  @@index([createdAt])
+}
+
+// =============================================================
+// MARKETER PROFILE CHANGE REQUEST
+// =============================================================
+
+model MarketerProfileChangeRequest {
+  id         String @id @default(cuid())
+  marketerId String
+
+  currentFirstName String?
+  currentLastName  String?
+  currentEmail     String?
+  currentPhone     String?
+
+  requestedFirstName String?
+  requestedLastName  String?
+  requestedEmail     String?
+  requestedPhone     String?
+
+  reason String?
+
+  status MarketerProfileChangeStatus @default(PENDING)
+
+  adminNotes   String?
+  reviewedAt   DateTime?
+  reviewedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  marketer Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
+
+  @@index([marketerId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// =============================================================
+// MARKETER COVERAGE
+// =============================================================
+
+model MarketerCoverage {
+  id             String @id @default(cuid())
+  marketerId     String @unique
+  countyId       String
+  constituencyId String
+
+  // Ward IDs covered by the marketer.
+  wardIds String[]
+
+  assignedAt DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  marketer Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
+
+  county County @relation(fields: [countyId], references: [id], onDelete: Cascade)
+
+  constituency Constituency @relation(fields: [constituencyId], references: [id], onDelete: Cascade)
+
+  properties Property[]
+
+  @@index([countyId])
+  @@index([constituencyId])
+}
+
+// =============================================================
+// MARKETER APPLICATION
+// =============================================================
+
+model MarketerApplication {
+  id String @id @default(cuid())
+
+  // -----------------------------------------------------------
+  // PERSONAL INFORMATION
+  // -----------------------------------------------------------
+
+  firstName String
+  lastName  String
+  phone     String
+  email     String
+
+  // -----------------------------------------------------------
+  // IDENTITY
+  // -----------------------------------------------------------
+
+  idType     MarketerIdType
+  idNumber   String
+  idFrontUrl String?
+  idBackUrl  String?
+
+  idVerificationStatus        MarketerIdVerificationStatus @default(PENDING)
+  idVerificationDecision      String?
+  idVerificationMessage       String?
+  idVerificationTransactionId String?
+  idVerifiedAt                DateTime?
+
+  // -----------------------------------------------------------
+  // GEOGRAPHIC COVERAGE
+  // -----------------------------------------------------------
+
+  countyId       String
+  constituencyId String
+  wardIds        String[]
+
+  timeInSelectedAreas String
+
+  // -----------------------------------------------------------
+  // EXPERIENCE
+  // -----------------------------------------------------------
+
+  hasRealEstateExperience Boolean
+  experienceAreas         String[]
+  experienceDuration      String
+  experienceDescription   String
+
+  // -----------------------------------------------------------
+  // CURRENT WORK
+  // -----------------------------------------------------------
+
+  currentOccupation        String
+  workingWithAnotherAgency Boolean
+  currentAgencyName        String?
+
+  // -----------------------------------------------------------
+  // MOTIVATION
+  // -----------------------------------------------------------
+
+  motivation                 String
+  contribution               String
+  expectedPropertiesPerMonth String
+
+  // -----------------------------------------------------------
+  // PROPERTY SOURCES
+  // -----------------------------------------------------------
+
+  propertySources          String[]
+  knowsLandlords           Boolean
+  approximateLandlordCount Int?
+
+  // -----------------------------------------------------------
+  // COMMUNICATION
+  // -----------------------------------------------------------
+
+  comfortableCommunicating  Boolean
+  communicationMethods      String[]
+  timeAvailability          String
+  willingToFollowProcedures Boolean
+
+  // -----------------------------------------------------------
+  // REFERENCE
+  // -----------------------------------------------------------
+
+  referenceName         String
+  referencePhone        String
+  referenceRelationship String
+
+  // -----------------------------------------------------------
+  // DECLARATION
+  // -----------------------------------------------------------
+
+  declarationAccepted Boolean
+
+  // -----------------------------------------------------------
+  // CREATED MARKETER
+  // -----------------------------------------------------------
+
+  marketerId String? @unique
+
+  marketer Marketer? @relation(fields: [marketerId], references: [id], onDelete: SetNull)
+
+  // -----------------------------------------------------------
+  // APPLICATION ACCESS
+  // -----------------------------------------------------------
+  //
+  // Applicants do not have a MAKAZII account yet.
+  // This hashed token lets the applicant securely retrieve
+  // and resubmit their own application without exposing
+  // applications by email or phone number.
+  //
+
+  accessTokenHash      String?   @unique
+  accessTokenCreatedAt DateTime?
+
+  // -----------------------------------------------------------
+  // APPLICATION WORKFLOW
+  // -----------------------------------------------------------
+
+  status           MarketerApplicationStatus @default(PENDING)
+  adminNotes       String?
+  rejectionReason  String?
+  requestedChanges String?
+
+  reviewedAt DateTime?
+  approvedAt DateTime?
+  rejectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([email])
+  @@index([phone])
+  @@index([countyId])
+  @@index([constituencyId])
+  @@index([createdAt])
+  @@index([idVerificationStatus])
+}
+
+// =============================================================
+// KENYA GEOGRAPHY
+// =============================================================
+
+model County {
+  id       String @id
+  sourceId String @unique
+  name     String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  constituencies    Constituency[]
+  properties        Property[]
+  places            Place[]
+  marketerCoverages MarketerCoverage[]
+
+  @@index([name])
+}
+
+// =============================================================
+// CONSTITUENCY
+// =============================================================
+
+model Constituency {
+  id       String @id
+  sourceId String @unique
+  name     String
+  countyId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  county County @relation(fields: [countyId], references: [id], onDelete: Cascade)
+
+  wards             Ward[]
+  properties        Property[]
+  marketerCoverages MarketerCoverage[]
+
+  @@unique([countyId, name])
+  @@index([countyId])
+  @@index([name])
+}
+
+// =============================================================
+// WARD
+// =============================================================
+
+model Ward {
+  id             String @id
+  sourceId       String @unique
+  name           String
+  constituencyId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  constituency Constituency @relation(fields: [constituencyId], references: [id], onDelete: Cascade)
+
+  properties Property[]
+
+  @@unique([constituencyId, name])
+  @@index([constituencyId])
+  @@index([name])
+}
+
+// =============================================================
+// PLACE
+// =============================================================
+
+model Place {
+  id       String @id @default(cuid())
+  name     String
+  countyId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  county County @relation(fields: [countyId], references: [id], onDelete: Cascade)
+
+  marketers  MarketerPlace[]
+  properties Property[]
+
+  @@unique([countyId, name])
+  @@index([countyId])
+}
+
+// =============================================================
+// MARKETER ↔ PLACE
+// =============================================================
+
+model MarketerPlace {
+  marketerId String
+  placeId    String
+
+  assignedAt DateTime @default(now())
+
+  marketer Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
+
+  place Place @relation(fields: [placeId], references: [id], onDelete: Cascade)
+
+  @@id([marketerId, placeId])
+  @@index([placeId])
+}
+
+// =============================================================
+// PROPERTY / ACCOMMODATION
+// =============================================================
+
+model Property {
+  id          String  @id @default(cuid())
+  title       String
+  description String?
+
+  // -----------------------------------------------------------
+  // PRIMARY PROPERTY CLASSIFICATION
+  // -----------------------------------------------------------
+  //
+  // LONG_STAY
+  // SHORT_STAY
+  //
+
+  purpose PropertyPurpose
+
+  // -----------------------------------------------------------
+  // LONG-STAY TYPE
+  // -----------------------------------------------------------
+
+  longStayType LongStayType?
+
+  // -----------------------------------------------------------
+  // SHORT-STAY TYPE
+  // -----------------------------------------------------------
+
+  shortStayType ShortStayType?
+
+  // -----------------------------------------------------------
+  // PROPERTY WORKFLOW
+  // -----------------------------------------------------------
+
+  status PropertyStatus @default(DRAFT)
+
+  // -----------------------------------------------------------
+  // LONG-STAY PRICING
+  // -----------------------------------------------------------
+
+  monthlyRent   Int?
+  deposit       Int?
+  viewingFee    Int?
+  serviceCharge Int?
+
+  // -----------------------------------------------------------
+  // SHORT-STAY PRICING
+  // -----------------------------------------------------------
+
+  dayRate      Int?
+  nightRate    Int?
+  dayNightRate Int?
+
+  stayMode StayMode?
+
+  // -----------------------------------------------------------
+  // PROPERTY DETAILS
+  // -----------------------------------------------------------
+
+  bedrooms  Int?
+  bathrooms Int?
+  beds      Int?
+  maxGuests Int?
+  rooms     Int?
+
+  furnishing FurnishingType?
+
+  // -----------------------------------------------------------
+  // LOCATION
+  // -----------------------------------------------------------
+
+  countyId       String
+  constituencyId String
+  wardId         String
+
+  // Human-readable location information.
+  county String
+  town   String
+  area   String
+
+  placeId String?
+
+  latitude  Float?
+  longitude Float?
+
+  // -----------------------------------------------------------
+  // AVAILABILITY
+  // -----------------------------------------------------------
+
+  available Boolean @default(true)
+
+  // -----------------------------------------------------------
+  // VERIFICATION
+  // -----------------------------------------------------------
+
+  verified Boolean @default(false)
+
+  verifiedAt   DateTime?
+  verifiedById String?
+
+  // -----------------------------------------------------------
+  // CREATOR / SOURCE MARKETER
+  // -----------------------------------------------------------
+  //
+  // createdById:
+  // The actual User who created/entered the listing.
+  //
+  // marketerId:
+  // The marketer who sourced the property.
+  //
+  // These are intentionally different fields.
+  //
+  // Example:
+  //
+  // Marketer adds property:
+  // createdById = marketer user ID
+  // marketerId  = marketer ID
+  //
+  // Admin adds property from Marketer A:
+  // createdById = admin user ID
+  // marketerId  = Marketer A ID
+  //
+
+  createdById String
+  marketerId  String
+
+  // Snapshot/reference of the marketer's coverage when relevant.
+  marketerCoverageId String?
+
+  // -----------------------------------------------------------
+  // TIMESTAMPS
+  // -----------------------------------------------------------
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // -----------------------------------------------------------
+  // GEOGRAPHY
+  // -----------------------------------------------------------
+
+  countyRelation County @relation(fields: [countyId], references: [id])
+
+  constituency Constituency @relation(fields: [constituencyId], references: [id])
+
+  ward Ward @relation(fields: [wardId], references: [id])
+
+  place Place? @relation(fields: [placeId], references: [id], onDelete: SetNull)
+
+  // -----------------------------------------------------------
+  // CREATOR / VERIFIER
+  // -----------------------------------------------------------
+
+  createdBy User @relation("PropertyCreatedBy", fields: [createdById], references: [id])
+
+  verifiedBy User? @relation("PropertyVerifiedBy", fields: [verifiedById], references: [id], onDelete: SetNull)
+
+  // -----------------------------------------------------------
+  // SOURCE MARKETER
+  // -----------------------------------------------------------
+
+  marketer Marketer @relation(fields: [marketerId], references: [id])
+
+  marketerCoverage MarketerCoverage? @relation(fields: [marketerCoverageId], references: [id], onDelete: SetNull)
+
+  // -----------------------------------------------------------
+  // PROPERTY CONTENT
+  // -----------------------------------------------------------
+
+  amenities     PropertyAmenity[]
+  images        PropertyImage[]
+  statusHistory PropertyStatusHistory[]
+
+  // -----------------------------------------------------------
+  // CUSTOMER
+  // -----------------------------------------------------------
+
+  shortlists Shortlist[]
+
+  // -----------------------------------------------------------
+  // LONG-STAY
+  // -----------------------------------------------------------
+
+  viewingRequests ViewingRequest[]
+
+  // -----------------------------------------------------------
+  // SHORT-STAY
+  // -----------------------------------------------------------
+
+  stayBookings    StayBooking[]
+  stayInspections StayInspection[]
+
+  @@index([purpose])
+  @@index([longStayType])
+  @@index([shortStayType])
+  @@index([status])
+  @@index([countyId])
+  @@index([constituencyId])
+  @@index([wardId])
+  @@index([county])
+  @@index([town])
+  @@index([area])
+  @@index([placeId])
+  @@index([monthlyRent])
+  @@index([dayRate])
+  @@index([nightRate])
+  @@index([available])
+  @@index([verified])
+  @@index([createdById])
+  @@index([verifiedById])
+  @@index([marketerId])
+  @@index([marketerCoverageId])
+  @@index([createdAt])
+}
+
+// =============================================================
+// PROPERTY IMAGES
+// =============================================================
+
+model PropertyImage {
+  id           String @id @default(cuid())
+  propertyId   String
+  uploadedById String
+
+  url      String
+  publicId String?
+  altText  String?
+
+  category ImageCategory @default(OTHER)
+
+  sortOrder Int     @default(0)
+  isPrimary Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  uploadedBy User     @relation("PropertyImageUploadedBy", fields: [uploadedById], references: [id])
+
+  @@index([propertyId])
+  @@index([uploadedById])
+  @@index([category])
+}
+
+// =============================================================
+// AMENITIES
+// =============================================================
+
+model Amenity {
+  id       String          @id @default(cuid())
+  name     String          @unique
+  category AmenityCategory @default(OTHER)
+  isActive Boolean         @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  properties PropertyAmenity[]
+
+  @@index([category])
+  @@index([isActive])
+}
+
+// =============================================================
+// PROPERTY ↔ AMENITY
+// =============================================================
+
+model PropertyAmenity {
+  propertyId String
+  amenityId  String
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  amenity Amenity @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+
+  @@id([propertyId, amenityId])
+  @@index([amenityId])
+}
+
+// =============================================================
+// CUSTOMER SHORTLIST
+// =============================================================
+
+model Shortlist {
+  id         String @id @default(cuid())
+  userId     String
+  propertyId String
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, propertyId])
+  @@index([userId])
+  @@index([propertyId])
+}
+
+// =============================================================
+// PROPERTY STATUS HISTORY
+// =============================================================
+
+model PropertyStatusHistory {
+  id         String @id @default(cuid())
+  propertyId String
+
+  fromStatus PropertyStatus?
+  toStatus   PropertyStatus
+
+  note        String?
+  changedById String?
+
+  createdAt DateTime @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId])
+  @@index([changedById])
+  @@index([createdAt])
+}
+
+// =============================================================
+// LONG-STAY VIEWING REQUEST
+// =============================================================
+
+model ViewingRequest {
+  id         String @id @default(cuid())
+  propertyId String
+  renterId   String
+
+  requestedDate DateTime?
+  preferredTime String?
+  scheduledAt   DateTime?
+  notes         String?
+
+  status      ViewingStatus      @default(PENDING_PAYMENT)
+  requestedBy ViewingRequestedBy @default(RENTER)
+
+  // -----------------------------------------------------------
+  // OPERATIONAL ASSIGNMENT
+  // -----------------------------------------------------------
+  //
+  // This can be different from property.marketerId.
+  //
+  // property.marketerId = source marketer
+  // assignedMarketerId  = marketer handling this viewing
+  //
+
+  assignedMarketerId String?
+  assignedAt         DateTime?
+
+  confirmedAt DateTime?
+  completedAt DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id])
+
+  renter User @relation(fields: [renterId], references: [id])
+
+  assignedMarketer Marketer? @relation("ViewingAssignedMarketer", fields: [assignedMarketerId], references: [id], onDelete: SetNull)
+
+  statusHistory ViewingStatusHistory[]
+  payments      Payment[]
+
+  @@index([propertyId])
+  @@index([renterId])
+  @@index([status])
+  @@index([requestedDate])
+  @@index([assignedMarketerId])
+  @@index([createdAt])
+}
+
+// =============================================================
+// VIEWING STATUS HISTORY
+// =============================================================
+
+model ViewingStatusHistory {
+  id        String @id @default(cuid())
+  viewingId String
+
+  status ViewingStatus
+  note   String?
+
+  changedById String?
+
+  createdAt DateTime @default(now())
+
+  viewing ViewingRequest @relation(fields: [viewingId], references: [id], onDelete: Cascade)
+
+  @@index([viewingId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// =============================================================
+// SHORT-STAY INSPECTION
+// =============================================================
+
+model StayInspection {
+  id         String @id @default(cuid())
+  propertyId String
+  renterId   String
+
+  requestedDate DateTime?
+  preferredTime String?
+  notes         String?
+
+  status StayInspectionStatus @default(PENDING_PAYMENT)
+
+  assignedMarketerId String?
+  assignedAt         DateTime?
+
+  confirmedAt DateTime?
+  completedAt DateTime?
+  cancelledAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id])
+
+  renter User @relation(fields: [renterId], references: [id])
+
+  assignedMarketer Marketer? @relation("InspectionAssignedMarketer", fields: [assignedMarketerId], references: [id], onDelete: SetNull)
+
+  payments Payment[]
+
+  @@index([propertyId])
+  @@index([renterId])
+  @@index([status])
+  @@index([requestedDate])
+  @@index([assignedMarketerId])
+  @@index([createdAt])
+}
+
+// =============================================================
+// SHORT-STAY BOOKING
+// =============================================================
+
+model StayBooking {
+  id         String @id @default(cuid())
+  propertyId String
+  renterId   String
+
+  // -----------------------------------------------------------
+  // DATES
+  // -----------------------------------------------------------
+
+  checkInDate  DateTime
+  checkOutDate DateTime?
+
+  startTime String?
+  endTime   String?
+
+  // -----------------------------------------------------------
+  // GUESTS
+  // -----------------------------------------------------------
+
+  guests Int
+
+  // -----------------------------------------------------------
+  // STAY MODE
+  // -----------------------------------------------------------
+
+  stayMode StayMode
+
+  // -----------------------------------------------------------
+  // BOOKING STATUS
+  // -----------------------------------------------------------
+
+  status StayBookingStatus @default(PENDING_PAYMENT)
+
+  // -----------------------------------------------------------
+  // PRICE SNAPSHOTS
+  // -----------------------------------------------------------
+  //
+  // These preserve the price that existed when the customer booked.
+  //
+
+  dayRateSnapshot      Int?
+  nightRateSnapshot    Int?
+  dayNightRateSnapshot Int?
+
+  totalAmount Int?
+
+  // -----------------------------------------------------------
+  // OPERATIONAL ASSIGNMENT
+  // -----------------------------------------------------------
+
+  assignedMarketerId String?
+  assignedAt         DateTime?
+
+  // -----------------------------------------------------------
+  // LIFECYCLE
+  // -----------------------------------------------------------
+
+  confirmedAt  DateTime?
+  checkedInAt  DateTime?
+  checkedOutAt DateTime?
+  cancelledAt  DateTime?
+  expiredAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property Property @relation(fields: [propertyId], references: [id])
+
+  renter User @relation(fields: [renterId], references: [id])
+
+  assignedMarketer Marketer? @relation("BookingAssignedMarketer", fields: [assignedMarketerId], references: [id], onDelete: SetNull)
+
+  payments Payment[]
+
+  @@index([propertyId])
+  @@index([renterId])
+  @@index([status])
+  @@index([checkInDate])
+  @@index([checkOutDate])
+  @@index([assignedMarketerId])
+  @@index([createdAt])
+}
+
+// =============================================================
+// PAYMENTS
+// =============================================================
+
+model Payment {
+  id String @id @default(cuid())
+
+  userId String
+
+  // Payment can belong to a viewing.
+  viewingRequestId String?
+
+  // Payment can belong to an inspection.
+  stayInspectionId String?
+
+  // Payment can belong to a short-stay booking.
+  stayBookingId String?
+
+  amount   Int
+  currency String @default("KES")
+
+  method   PaymentMethod?
+  provider PaymentProvider?
+
+  reference         String?
+  providerReference String?
+
+  status PaymentStatus @default(PENDING)
+
+  paidAt      DateTime?
+  failedAt    DateTime?
+  refundedAt  DateTime?
+  cancelledAt DateTime?
+
+  failureReason String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  viewingRequest ViewingRequest? @relation(fields: [viewingRequestId], references: [id], onDelete: SetNull)
+
+  stayInspection StayInspection? @relation(fields: [stayInspectionId], references: [id], onDelete: SetNull)
+
+  stayBooking StayBooking? @relation(fields: [stayBookingId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([reference])
+  @@index([providerReference])
+  @@index([viewingRequestId])
+  @@index([stayInspectionId])
+  @@index([stayBookingId])
+  @@index([createdAt])
+}
+
+// =============================================================
+// NOTIFICATIONS
+// =============================================================
+
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+
+  type    NotificationType
+  title   String
+  message String
+
+  readAt DateTime?
+
+  entityType String?
+  entityId   String?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([readAt])
+  @@index([createdAt])
+}
+
+// =============================================================
+// SUPPORT REQUESTS
+// =============================================================
+
+model SupportRequest {
+  id     String @id @default(cuid())
+  userId String
+
+  type    SupportRequestType
+  subject String?
+  message String
+
+  propertyId    String?
+  viewingId     String?
+  stayBookingId String?
+  marketerId    String?
+
+  status SupportRequestStatus @default(OPEN)
+
+  adminResponse String?
+  respondedAt   DateTime?
+  respondedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// =============================================================
+// FEEDBACK
+// =============================================================
+
+model Feedback {
+  id     String @id @default(cuid())
+  userId String
+
+  category FeedbackCategory
+
+  rating Int?
+
+  message String
+
+  propertyId    String?
+  viewingId     String?
+  stayBookingId String?
+  marketerId    String?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([category])
+  @@index([createdAt])
+}
+
+// =============================================================
+// PROBLEM REPORTS
+// =============================================================
+
+model ProblemReport {
+  id     String @id @default(cuid())
+  userId String
+
+  category         ProblemReportCategory
+  customerCategory String?
+  message          String
+
+  propertyId    String?
+  viewingId     String?
+  stayBookingId String?
+  marketerId    String?
+
+  status ProblemReportStatus @default(OPEN)
+
+  adminResponse String?
+  respondedAt   DateTime?
+  respondedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([category])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// =============================================================
+// AUDIT LOG
+// =============================================================
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  userId String?
+
+  action      String
+  entity      String
+  entityId    String?
+  description String?
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([entity])
+  @@index([entityId])
+  @@index([createdAt])
+}
+
+// =============================================================
+// ENUMS
+// =============================================================
+
+// =============================================================
+// USER
+// =============================================================
+
+enum UserRole {
+  ADMIN
+  STAFF
+  MARKETER
+  RENTER
+}
+
+// =============================================================
+// MARKETER APPLICATION
+// =============================================================
+
+enum MarketerIdType {
+  NATIONAL_ID
+  PASSPORT
+}
+
+enum MarketerIdVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  REVIEW
+}
+
+enum MarketerApplicationStatus {
+  PENDING
+  UNDER_REVIEW
+  ACTION_REQUIRED
+  APPROVED
+  REJECTED
+}
+
+enum MarketerProfileChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// =============================================================
+// PROPERTY
+// =============================================================
+
+enum PropertyPurpose {
+  LONG_STAY
+  SHORT_STAY
+}
+
+enum LongStayType {
+  SINGLE_ROOM
+  BEDSITTER
+  STUDIO
+  ONE_BEDROOM
+  TWO_BEDROOM
+  THREE_BEDROOM
+  FOUR_PLUS_BEDROOM
+  HOUSE
+  APARTMENT
+}
+
+enum ShortStayType {
+  BNB
+  LODGE
+  GUEST_HOUSE
+  HOTEL_ROOM
+  SERVICED_APARTMENT
+  FURNISHED_APARTMENT
+  HOLIDAY_HOME
+  VILLA
+  COTTAGE
+  HOSTEL
+  PRIVATE_ROOM
+}
+
+enum StayMode {
+  DAY
+  OVERNIGHT
+  DAY_AND_NIGHT
+  FLEXIBLE
+}
+
+enum FurnishingType {
+  UNFURNISHED
+  SEMI_FURNISHED
+  FURNISHED
+}
+
+enum PropertyStatus {
+  DRAFT
+  PENDING_VERIFICATION
+  CHANGES_REQUIRED
+  ACTIVE
+  RENTED
+  INACTIVE
+  REJECTED
+}
+
+// =============================================================
+// IMAGES
+// =============================================================
+
+enum ImageCategory {
+  EXTERIOR
+  BEDROOM
+  BATHROOM
+  KITCHEN
+  LIVING_ROOM
+  VIEW
+  AMENITY
+  OTHER
+}
+
+// =============================================================
+// AMENITIES
+// =============================================================
+
+enum AmenityCategory {
+  CONNECTIVITY
+  SECURITY
+  BATHROOM
+  KITCHEN
+  PARKING
+  OUTDOOR
+  ENTERTAINMENT
+  ACCESSIBILITY
+  FAMILY
+  OTHER
+}
+
+// =============================================================
+// VIEWINGS
+// =============================================================
+
+enum ViewingStatus {
+  PENDING_PAYMENT
+  PAID
+  AWAITING_ASSIGNMENT
+  ASSIGNED
+  APPROVED
+  RESCHEDULED
+  COMPLETED
+  CANCELLED
+  DECLINED
+
+  // Legacy status retained for existing status-history records.
+  // New application workflow uses APPROVED/RESCHEDULED instead.
+  CONFIRMED
+}
+
+enum ViewingRequestedBy {
+  RENTER
+  ADMIN
+  STAFF
+  MARKETER
+}
+
+// =============================================================
+// SHORT-STAY INSPECTIONS
+// =============================================================
+
+enum StayInspectionStatus {
+  PENDING_PAYMENT
+  PAID
+  AWAITING_ASSIGNMENT
+  ASSIGNED
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  DECLINED
+}
+
+// =============================================================
+// SHORT-STAY BOOKINGS
+// =============================================================
+
+enum StayBookingStatus {
+  PENDING_PAYMENT
+  PAID
+  AWAITING_ASSIGNMENT
+  ASSIGNED
+  CONFIRMED
+  CHECKED_IN
+  STAYING
+  CHECKED_OUT
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+// =============================================================
+// PAYMENTS
+// =============================================================
+
+enum PaymentMethod {
+  MPESA
+  CARD
+  BANK
+  CASH
+}
+
+enum PaymentProvider {
+  MPESA
+  STRIPE
+  BANK
+  INTERNAL
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
+// =============================================================
+// NOTIFICATIONS
+// =============================================================
+
+enum NotificationType {
+  // Long-stay viewing
+  VIEWING_REQUESTED
+  VIEWING_PAID
+  VIEWING_ASSIGNED
+  VIEWING_CONFIRMED
+  VIEWING_COMPLETED
+  VIEWING_DECLINED
+  VIEWING_CANCELLED
+
+  // Short-stay inspection
+  INSPECTION_REQUESTED
+  INSPECTION_PAID
+  INSPECTION_ASSIGNED
+  INSPECTION_CONFIRMED
+  INSPECTION_COMPLETED
+
+  // Short-stay booking
+  BOOKING_REQUESTED
+  BOOKING_PAID
+  BOOKING_ASSIGNED
+  BOOKING_CONFIRMED
+  BOOKING_CHECKED_IN
+  BOOKING_CHECKED_OUT
+  BOOKING_COMPLETED
+
+  // Property verification
+  PROPERTY_APPROVED
+  PROPERTY_CHANGES_REQUIRED
+  PROPERTY_REJECTED
+
+  // Payments
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+
+  GENERAL
+}
+
+// =============================================================
+// SUPPORT
+// =============================================================
+
+enum SupportRequestType {
+  FEEDBACK
+  PROBLEM_REPORT
+  HELP
+  CONTACT
+}
+
+enum SupportRequestStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+// =============================================================
+// FEEDBACK
+// =============================================================
+
+enum FeedbackCategory {
+  APP_EXPERIENCE
+  PROPERTY
+  VIEWING
+  STAY
+  MARKETER
+  PAYMENT
+  OTHER
+}
+
+// =============================================================
+// PROBLEM REPORT
+// =============================================================
+
+enum ProblemReportCategory {
+  PROPERTY
+  VIEWING
+  STAY
+  MARKETER
+  PAYMENT
+  ACCOUNT
+  APP
+  OTHER
+}
+
+enum ProblemReportStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}

@@ -1,0 +1,67 @@
+import { Router } from "express";
+
+import {
+  createProperty,
+  getAdminProperties,
+  getAdminProperty,
+  updateProperty,
+  updatePropertyAvailability,
+  updatePropertyStatus,
+} from "../controllers/propertyController";
+
+import {
+  requireAdmin,
+  requireAuth,
+} from "../middleware/authMiddleware";
+
+const router = Router();
+
+/**
+ * All property administration endpoints require
+ * an authenticated ADMIN user.
+ */
+router.use(requireAuth, requireAdmin);
+
+/**
+ * GET    /api/admin/properties
+ * POST   /api/admin/properties
+ */
+router.get("/", getAdminProperties);
+router.post("/", createProperty);
+
+/**
+ * GET    /api/admin/properties/:id
+ * PATCH  /api/admin/properties/:id
+ */
+router.get("/:id", getAdminProperty);
+router.patch("/:id", updateProperty);
+
+/**
+ * PATCH /api/admin/properties/:id/status
+ *
+ * Workflow status:
+ * DRAFT
+ * PENDING_VERIFICATION
+ * CHANGES_REQUIRED
+ * ACTIVE
+ * RENTED
+ * INACTIVE
+ * REJECTED
+ */
+router.patch(
+  "/:id/status",
+  updatePropertyStatus
+);
+
+/**
+ * PATCH /api/admin/properties/:id/availability
+ *
+ * Controls available/unavailable independently
+ * from the property workflow status.
+ */
+router.patch(
+  "/:id/availability",
+  updatePropertyAvailability
+);
+
+export default router;

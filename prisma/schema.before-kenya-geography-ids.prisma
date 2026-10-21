@@ -1,0 +1,402 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id              String               @id @default(cuid())
+  firstName       String
+  lastName        String
+  email           String               @unique
+  phone           String?              @unique
+  password        String
+  role            UserRole             @default(RENTER)
+  isActive        Boolean              @default(true)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  landlord        Landlord?
+  marketer        Marketer?
+  passwordResets  PasswordResetToken[]
+  shortlists      Shortlist[]
+  viewingRequests ViewingRequest[]
+
+  @@index([role])
+  @@index([email])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Landlord {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  nationalId String?
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  properties Property[]
+}
+
+model Marketer {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  places     MarketerPlace[]
+  properties Property[]
+  viewings   ViewingRequest[] @relation("ViewingAssignedMarketer")
+}
+
+model County {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  constituencies Constituency[]
+  places         Place[]
+
+  @@index([name])
+}
+
+model Constituency {
+  id        String   @id @default(cuid())
+  name      String
+  countyId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  county County @relation(fields: [countyId], references: [id], onDelete: Cascade)
+  wards  Ward[]
+
+  @@unique([countyId, name])
+  @@index([countyId])
+  @@index([name])
+}
+
+model Ward {
+  id             String   @id @default(cuid())
+  name           String
+  constituencyId String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  constituency Constituency @relation(fields: [constituencyId], references: [id], onDelete: Cascade)
+
+  @@unique([constituencyId, name])
+  @@index([constituencyId])
+  @@index([name])
+}
+
+model Place {
+  id        String   @id @default(cuid())
+  name      String
+  countyId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  county     County          @relation(fields: [countyId], references: [id], onDelete: Cascade)
+  marketers  MarketerPlace[]
+  properties Property[]
+
+  @@unique([countyId, name])
+  @@index([countyId])
+}
+
+model MarketerPlace {
+  marketerId String
+  placeId    String
+  assignedAt DateTime @default(now())
+
+  marketer Marketer @relation(fields: [marketerId], references: [id], onDelete: Cascade)
+  place    Place    @relation(fields: [placeId], references: [id], onDelete: Cascade)
+
+  @@id([marketerId, placeId])
+  @@index([placeId])
+}
+
+model Property {
+  id           String         @id @default(cuid())
+  title        String
+  description  String?
+  propertyType PropertyType
+  status       PropertyStatus @default(DRAFT)
+  rent         Int
+  deposit      Int?
+
+  county String
+  town   String
+  area   String
+
+  placeId String?
+
+  latitude  Float?
+  longitude Float?
+  bedrooms  Int?
+  bathrooms Int?
+  available Boolean @default(true)
+  verified  Boolean @default(false)
+
+  landlordId String
+  marketerId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  landlord Landlord  @relation(fields: [landlordId], references: [id])
+  marketer Marketer? @relation(fields: [marketerId], references: [id])
+  place    Place?    @relation(fields: [placeId], references: [id], onDelete: SetNull)
+
+  amenities       PropertyAmenity[]
+  images          PropertyImage[]
+  statusHistory   PropertyStatusHistory[]
+  shortlists      Shortlist[]
+  viewingRequests ViewingRequest[]
+
+  @@index([propertyType])
+  @@index([status])
+  @@index([county])
+  @@index([town])
+  @@index([area])
+  @@index([placeId])
+  @@index([rent])
+  @@index([available])
+  @@index([verified])
+  @@index([landlordId])
+  @@index([marketerId])
+}
+
+model PropertyImage {
+  id         String   @id @default(cuid())
+  propertyId String
+  url        String
+  publicId   String?
+  altText    String?
+  sortOrder  Int      @default(0)
+  isPrimary  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId])
+}
+
+model Amenity {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  properties PropertyAmenity[]
+}
+
+model PropertyAmenity {
+  propertyId String
+  amenityId  String
+
+  amenity  Amenity  @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@id([propertyId, amenityId])
+  @@index([amenityId])
+}
+
+model Shortlist {
+  id         String   @id @default(cuid())
+  userId     String
+  propertyId String
+  createdAt  DateTime @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, propertyId])
+  @@index([userId])
+  @@index([propertyId])
+}
+
+model ViewingRequest {
+  id                 String             @id @default(cuid())
+  propertyId         String
+  renterId           String
+  requestedDate      DateTime?
+  preferredTime      String?
+  notes              String?
+  status             ViewingStatus      @default(REQUESTED)
+  requestedBy        ViewingRequestedBy @default(RENTER)
+  assignedMarketerId String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  assignedMarketer Marketer?              @relation("ViewingAssignedMarketer", fields: [assignedMarketerId], references: [id])
+  property         Property               @relation(fields: [propertyId], references: [id])
+  renter           User                   @relation(fields: [renterId], references: [id])
+  statusHistory    ViewingStatusHistory[]
+
+  @@index([propertyId])
+  @@index([renterId])
+  @@index([status])
+  @@index([requestedDate])
+  @@index([assignedMarketerId])
+}
+
+model ViewingStatusHistory {
+  id        String        @id @default(cuid())
+  viewingId String
+  status    ViewingStatus
+  note      String?
+  createdAt DateTime      @default(now())
+
+  viewing ViewingRequest @relation(fields: [viewingId], references: [id], onDelete: Cascade)
+
+  @@index([viewingId])
+}
+
+model PropertyStatusHistory {
+  id         String         @id @default(cuid())
+  propertyId String
+  status     PropertyStatus
+  note       String?
+  createdAt  DateTime       @default(now())
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId])
+}
+
+model MarketerApplication {
+  id String @id @default(cuid())
+
+  firstName String
+  lastName  String
+  phone     String
+  email     String
+
+  idType     MarketerIdType
+  idNumber   String
+  idFrontUrl String?
+  idBackUrl  String?
+
+  countyId String
+  placeIds String[]
+
+  timeInSelectedAreas String
+
+  hasRealEstateExperience Boolean
+  experienceAreas         String[]
+  experienceDuration      String
+  experienceDescription   String
+
+  currentOccupation        String
+  workingWithAnotherAgency Boolean
+  currentAgencyName        String?
+
+  motivation                 String
+  contribution               String
+  expectedPropertiesPerMonth String
+
+  propertySources          String[]
+  knowsLandlords           Boolean
+  approximateLandlordCount Int?
+
+  comfortableCommunicating  Boolean
+  communicationMethods      String[]
+  timeAvailability          String
+  willingToFollowProcedures Boolean
+
+  referenceName         String
+  referencePhone        String
+  referenceRelationship String
+
+  declarationAccepted Boolean
+
+  status           MarketerApplicationStatus @default(PENDING)
+  adminNotes       String?
+  rejectionReason  String?
+  requestedChanges String?
+
+  reviewedAt DateTime?
+  approvedAt DateTime?
+  rejectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([email])
+  @@index([phone])
+  @@index([countyId])
+  @@index([createdAt])
+}
+
+enum MarketerIdType {
+  NATIONAL_ID
+  PASSPORT
+}
+
+enum MarketerApplicationStatus {
+  PENDING
+  UNDER_REVIEW
+  ACTION_REQUIRED
+  APPROVED
+  REJECTED
+}
+
+enum UserRole {
+  ADMIN
+  STAFF
+  MARKETER
+  LANDLORD
+  RENTER
+}
+
+enum PropertyType {
+  SINGLE_ROOM
+  BEDSITTER
+  ONE_BEDROOM
+  TWO_BEDROOM
+  THREE_BEDROOM
+}
+
+enum PropertyStatus {
+  DRAFT
+  PENDING_VERIFICATION
+  ACTIVE
+  RENTED
+  INACTIVE
+  REJECTED
+}
+
+enum ViewingStatus {
+  REQUESTED
+  CONFIRMED
+  ASSIGNED
+  COMPLETED
+  CANCELLED
+  DECLINED
+}
+
+enum ViewingRequestedBy {
+  RENTER
+  ADMIN
+  STAFF
+  MARKETER
+}

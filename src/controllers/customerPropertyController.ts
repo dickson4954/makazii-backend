@@ -1,0 +1,450 @@
+import type { Request, Response } from "express";
+
+import prisma from "../config/prisma";
+
+/**
+ * Customer/public property listing.
+ *
+ * Only approved, active and available properties are exposed.
+ *
+ * IMPORTANT:
+ * Do not expose:
+ * - createdById
+ * - marketerId
+ * - createdBy
+ * - marketer
+ * - landlord
+ * - verifiedById
+ * - statusHistory
+ */
+export async function getCustomerProperties(
+  req: Request,
+  res: Response
+) {
+  try {
+    const search =
+      typeof req.query.search === "string"
+        ? req.query.search.trim()
+        : "";
+
+    const county =
+      typeof req.query.county === "string"
+        ? req.query.county.trim()
+        : "";
+
+    const town =
+      typeof req.query.town === "string"
+        ? req.query.town.trim()
+        : "";
+
+    const area =
+      typeof req.query.area === "string"
+        ? req.query.area.trim()
+        : "";
+
+    const purpose =
+      typeof req.query.purpose === "string"
+        ? req.query.purpose.trim()
+        : "";
+
+    const shortStayType =
+      typeof req.query.shortStayType === "string"
+        ? req.query.shortStayType.trim()
+        : "";
+
+    const longStayType =
+      typeof req.query.longStayType === "string"
+        ? req.query.longStayType.trim()
+        : "";
+
+    const where: any = {
+      status: "ACTIVE",
+      available: true,
+      verified: true,
+    };
+
+    if (county) {
+      where.county = {
+        contains: county,
+        mode: "insensitive",
+      };
+    }
+
+    if (town) {
+      where.town = {
+        contains: town,
+        mode: "insensitive",
+      };
+    }
+
+    if (area) {
+      where.area = {
+        contains: area,
+        mode: "insensitive",
+      };
+    }
+
+    if (purpose) {
+      where.purpose = purpose;
+    }
+
+    if (shortStayType) {
+      where.shortStayType = shortStayType;
+    }
+
+    if (longStayType) {
+      where.longStayType = longStayType;
+    }
+
+    if (search) {
+      where.OR = [
+        {
+          title: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          description: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          county: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          town: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+        {
+          area: {
+            contains: search,
+            mode: "insensitive",
+          },
+        },
+      ];
+    }
+
+    const properties = await prisma.property.findMany({
+      where,
+      select: {
+        id: true,
+        title: true,
+        description: true,
+
+        // Real property video; never substitute a placeholder.
+        videoUrl: true,
+        videoMimeType: true,
+
+        purpose: true,
+        longStayType: true,
+        shortStayType: true,
+
+        monthlyRent: true,
+        deposit: true,
+        viewingFee: true,
+        serviceCharge: true,
+
+        dayRate: true,
+        nightRate: true,
+        dayNightRate: true,
+        stayMode: true,
+
+        bedrooms: true,
+        bathrooms: true,
+        beds: true,
+        maxGuests: true,
+        rooms: true,
+        furnishing: true,
+
+        county: true,
+        town: true,
+        area: true,
+
+        place: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+
+        latitude: true,
+        longitude: true,
+
+        available: true,
+        verified: true,
+
+        // Real timestamps for customer-facing listing labels.
+        createdAt: true,
+        publishedAt: true,
+        verifiedAt: true,
+
+        // Select only public display-name fields for the actual creator.
+        createdBy: {
+          select: {
+            firstName: true,
+            lastName: true,
+          },
+        },
+
+        // Retain the marketer name for compatibility with existing clients.
+        marketer: {
+          select: {
+            user: {
+              select: {
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        },
+
+        images: {
+          orderBy: {
+            sortOrder: "asc",
+          },
+          select: {
+            id: true,
+            url: true,
+            altText: true,
+            category: true,
+            sortOrder: true,
+            isPrimary: true,
+          },
+        },
+
+        amenities: {
+          where: {
+            amenity: {
+              isActive: true,
+            },
+          },
+          select: {
+            amenity: {
+              select: {
+                id: true,
+                name: true,
+                category: true,
+              },
+            },
+          },
+        },
+      },
+
+      orderBy: [
+        { publishedAt: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+      ],
+    });
+
+    const data = properties.map(
+      ({ createdBy, marketer, amenities, ...property }) => ({
+        ...property,
+        uploaderName:
+          `${createdBy.firstName ?? ""} ${createdBy.lastName ?? ""}`.trim()
+          || null,
+        marketerName: marketer?.user
+          ? `${marketer.user.firstName} ${marketer.user.lastName}`.trim()
+          : null,
+        amenities: amenities.map(
+          (propertyAmenity) => propertyAmenity.amenity
+        ),
+      })
+    );
+
+    return res.json({
+      success: true,
+      data,
+      count: data.length,
+    });
+  } catch (error) {
+    console.error("Get customer properties error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load properties",
+    });
+  }
+}
+
+/**
+ * GET /api/properties/:id
+ *
+ * Returns one customer-visible property.
+ */
+export async function getCustomerProperty(
+  req: Request,
+  res: Response
+) {
+  try {
+    const propertyId =
+      typeof req.params.id === "string"
+        ? req.params.id.trim()
+        : "";
+
+    if (!propertyId) {
+      return res.status(400).json({
+        success: false,
+        message: "Property ID is required",
+      });
+    }
+
+    const property = await prisma.property.findFirst({
+      where: {
+        id: propertyId,
+        status: "ACTIVE",
+        available: true,
+        verified: true,
+      },
+
+      select: {
+        id: true,
+        title: true,
+        description: true,
+
+        // Real property video; never substitute a placeholder.
+        videoUrl: true,
+        videoMimeType: true,
+
+        purpose: true,
+        longStayType: true,
+        shortStayType: true,
+
+        monthlyRent: true,
+        deposit: true,
+        viewingFee: true,
+        serviceCharge: true,
+
+        dayRate: true,
+        nightRate: true,
+        dayNightRate: true,
+        stayMode: true,
+
+        bedrooms: true,
+        bathrooms: true,
+        beds: true,
+        maxGuests: true,
+        rooms: true,
+        furnishing: true,
+
+        county: true,
+        town: true,
+        area: true,
+
+        place: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+
+        latitude: true,
+        longitude: true,
+
+        available: true,
+        verified: true,
+
+        // Real timestamps for customer-facing listing labels.
+        createdAt: true,
+        publishedAt: true,
+        verifiedAt: true,
+
+        // Select only public display-name fields for the actual creator.
+        createdBy: {
+          select: {
+            firstName: true,
+            lastName: true,
+          },
+        },
+
+        // Retain the marketer name for compatibility with existing clients.
+        marketer: {
+          select: {
+            user: {
+              select: {
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        },
+
+        images: {
+          orderBy: {
+            sortOrder: "asc",
+          },
+          select: {
+            id: true,
+            url: true,
+            altText: true,
+            category: true,
+            sortOrder: true,
+            isPrimary: true,
+          },
+        },
+
+        amenities: {
+          where: {
+            amenity: {
+              isActive: true,
+            },
+          },
+          select: {
+            amenity: {
+              select: {
+                id: true,
+                name: true,
+                category: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!property) {
+      return res.status(404).json({
+        success: false,
+        message: "Property not found",
+      });
+    }
+
+    const {
+      createdBy,
+      marketer,
+      amenities,
+      ...publicProperty
+    } = property;
+
+    const data = {
+      ...publicProperty,
+      uploaderName:
+        `${createdBy.firstName ?? ""} ${createdBy.lastName ?? ""}`.trim()
+        || null,
+      marketerName: marketer?.user
+        ? `${marketer.user.firstName} ${marketer.user.lastName}`.trim()
+        : null,
+      amenities: amenities.map(
+        (propertyAmenity) => propertyAmenity.amenity
+      ),
+    };
+
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error("Get customer property error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load property",
+    });
+  }
+}

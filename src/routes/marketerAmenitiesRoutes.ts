@@ -1,0 +1,24 @@
+import { Router } from "express";
+
+import { getAmenities } from "../controllers/amenityController";
+import {
+  requireAuth,
+  requireMarketer,
+  requireActiveMarketer,
+} from "../middleware/authMiddleware";
+
+const router = Router();
+
+router.use(requireAuth);
+router.use(requireMarketer);
+router.use(requireActiveMarketer);
+
+/**
+ * GET /api/marketer/amenities
+ *
+ * Read-only access to the shared MAKAZII
+ * amenity catalogue for marketer properties.
+ */
+router.get("/", getAmenities);
+
+export default router;
